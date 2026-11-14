@@ -506,6 +506,9 @@ def main():
         ctl = eye_control.GuidedControl(robot, look=args.dwell, grab_mm=args.grab_mm, movement=args.movement)
         if args.voice:
             device = int(args.microphone) if args.microphone and args.microphone.isdigit() else args.microphone
+            if device is None:                         # the speaker's microphone first, the webcam's as fallback
+                from eyereach.audio_devices import pick_microphone
+                device = pick_microphone()
             listener = VoiceInput(args.voice_model, device).start()
         microphone_failed = False
         clicks = []

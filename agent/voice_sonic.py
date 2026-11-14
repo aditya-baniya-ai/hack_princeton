@@ -210,8 +210,14 @@ async def talk(microphone=None, speaker=None):
                 speaking_until[0] = max(speaking_until[0], time.monotonic()) + len(pcm) / (2 * OUT_RATE) + 0.3
                 await loop.run_in_executor(None, out.write, pcm)
 
-    with sd.RawInputStream(samplerate=IN_RATE, blocksize=CHUNK, channels=1, dtype="int16",
-                           device=microphone, callback=heard):
+    try:
+        listening = sd.RawInputStream(samplerate=IN_RATE, blocksize=CHUNK, channels=1, dtype="int16",
+                                      device=microphone, callback=heard)
+    except Exception as error:                     # busy (another program has it) or unplugged: the webcam
+        print(f"Microphone {microphone} didn't open ({error}); using the webcam (system default) instead.")
+        listening = sd.RawInputStream(samplerate=IN_RATE, blocksize=CHUNK, channels=1, dtype="int16",
+                                      device=None, callback=heard)
+    with listening:
         tasks = [asyncio.create_task(send_microphone()), asyncio.create_task(play())]
         try:
             while session.active:
@@ -230,7 +236,8 @@ def main():
     parser = argparse.ArgumentParser(description="Talk to EyeReach with Amazon Nova 2 Sonic.")
     parser.add_argument("--text", help="send this sentence instead of the microphone; save the reply as a WAV file")
     parser.add_argument("--out", default="/tmp/eyereach_sonic_reply.wav", help="where --text saves the reply")
-    parser.add_argument("--microphone", help="input device number or name (default: the system's)")
+    parser.add_argument("--microphone", help="input device number or name (default: the speaker's microphone, "
+                                             "else the webcam's; see eyereach/audio_devices.py)")
     parser.add_argument("--speaker", help="output device number or name (default: the system's)")
     parser.add_argument("--list", action="store_true", help="list audio devices and exit")
     args = parser.parse_args()
@@ -245,8 +252,13 @@ def main():
         seconds = asyncio.run(say_text(args.text, args.out))
         print(f"Reply: {seconds:.1f} s of speech saved to {args.out}" if seconds else "No spoken reply came back.")
         return 0 if seconds else 1
+    microphone = device(args.microphone)
+    if microphone is None:                             # the speaker's microphone first, the webcam's as fallback
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from eyereach.audio_devices import pick_microphone
+        microphone = pick_microphone()
     try:
-        asyncio.run(talk(device(args.microphone), device(args.speaker)))
+        asyncio.run(talk(microphone, device(args.speaker)))
     except KeyboardInterrupt:
         print("\nBye.")
     return 0

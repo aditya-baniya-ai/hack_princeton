@@ -145,6 +145,9 @@ def main():
         print(sd.query_devices())
         return
     device = int(args.device) if args.device and args.device.isdigit() else args.device
+    if device is None:
+        from eyereach.audio_devices import pick_microphone
+        device = pick_microphone()
     listener = VoiceInput(args.model, device).start()
     print('Say Robot move left, Robot grab the item, or Stop. Ctrl+C exits. No robot is connected.')
     try:

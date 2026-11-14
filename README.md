@@ -130,6 +130,11 @@ launch/talk.sh --list                 # audio devices; pick with --microphone N 
 - It stops listening while it speaks, so it can't hear itself through the speaker.
 - Sonic only answers while an audio input is open, so even `--text` sends silence while it waits.
 - It runs in `~/eyereach_agent_venv` (Python 3.12, which the Sonic SDK needs); `launch/setup_jetson.sh` installs it.
+- **Microphone: the speaker's first, the webcam's as fallback** (both voice programs, `eyereach/audio_devices.py`).
+  A USB microphone that isn't a camera (the speaker's "USB PnP Audio Device") is used when it opens at 16 kHz;
+  otherwise, or when another program already has it, the webcam (the system default). PulseAudio doesn't list the
+  speaker's microphone (that card only offers output profiles), so it is opened directly. `python3 -m
+  eyereach.audio_devices` shows the choice; `EYEREACH_MIC=C920` (in `.env` or the terminal) forces the webcam.
 - Sound devices: `pactl set-default-source` / `pactl set-default-sink` choose the system microphone and speaker
   (`pactl list short sources`, `pactl list short sinks` list them).
 
