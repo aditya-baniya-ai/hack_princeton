@@ -128,6 +128,22 @@ class RobotTest(unittest.TestCase):
         tools["ask_user_to_confirm"].invoke({"name": "banana"})
         self.assertIn("no banana", tools["pick"].invoke({"name": "banana"}))
 
+    def test_pick_moves_the_arm_to_the_object(self):
+        spots = []
+        robot = Robot(confirm=lambda name: True, arm=lambda spot: spots.append(spot))
+        tools = robot.tools()
+        tools["ask_user_to_confirm"].invoke({"name": "cup"})
+        self.assertIn("Brought the cup", tools["pick"].invoke({"name": "cup"}))
+        self.assertEqual(spots, [{"name": "cup", "u": 0.30, "v": 0.55}])
+
+    def test_arm_failure_is_reported(self):
+        robot = Robot(confirm=lambda name: True, arm=lambda spot: "missed: the gripper closed on nothing")
+        tools = robot.tools()
+        tools["ask_user_to_confirm"].invoke({"name": "cup"})
+        self.assertIn("missed", tools["pick"].invoke({"name": "cup"}))
+        self.assertEqual(robot.holding, None)
+        self.assertIn("refused", tools["pick"].invoke({"name": "cup"}).lower())   # a yes is for one try
+
     def test_drop_with_empty_hand(self):
         self.assertEqual(Robot().tools()["drop"].invoke({}), "Nothing to drop.")
 

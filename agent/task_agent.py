@@ -2,6 +2,8 @@
 
     python3 -m agent.task_agent "bring me the pills"                  pretend table, pretend arm
     python3 -m agent.task_agent "bring me the snack" --photo desk.jpg the objects come from Nova (#5)
+    python3 -m agent.task_agent "grab me a banana" --camera 2 --arm real   Nova + the real arm
+    launch/eyereach.sh --agent "grab me a banana" --camera 2         the same, and it starts the arm first
 
 Built with LangChain deepagents:
     - a perception sub-agent that finds the objects (list_objects),
@@ -11,17 +13,21 @@ Built with LangChain deepagents:
 
 Safety lock: pick() refuses unless the user confirmed that exact object, whatever the model says.
 
-The tools are pretend for now (no arm, camera or Photon needed); the app plugs in the real ones later.
+Without --arm the arm is pretend. With --arm, pick runs brain/fetch.py (in the arm's Python, which has ROS):
+it glides over the object, grabs it, carries it next to the person and lets go. The table camera must be
+calibrated once first (python3 brain/fetch.py calibrate --camera N). Asking the person is a y/n in the terminal.
 
 Environment variables:
     AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY   the agent's model runs on Amazon Bedrock
     AWS_REGION                                 default us-east-1
     AGENT_MODEL_ID                             default us.amazon.nova-2-lite-v1:0
     EYEREACH_NOTES                             notes folder, default ~/.eyereach/agent
+    EYEREACH_ARM_PYTHON                        the Python that runs brain/fetch.py, default ~/eyereach_venv
 """
 
 import argparse
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -31,6 +37,9 @@ NOTES_DIR = Path(os.environ.get("EYEREACH_NOTES", Path.home() / ".eyereach" / "a
 NOTES_FILE = "/notes.md"                                      # inside NOTES_DIR
 MODEL = os.environ.get("AGENT_MODEL_ID", "us.amazon.nova-2-lite-v1:0")
 REGION = os.environ.get("AWS_REGION", "us-east-1")
+ROOT = Path(__file__).resolve().parent.parent
+ARM_PYTHON = os.environ.get("EYEREACH_ARM_PYTHON") or next(
+    (str(p) for p in [Path.home() / "eyereach_venv" / "bin" / "python"] if p.exists()), "python3")
 
 PRETEND_TABLE = [{"name": "cup", "u": 0.30, "v": 0.55}, {"name": "pill bottle", "u": 0.42, "v": 0.60},
                  {"name": "phone", "u": 0.75, "v": 0.70}]
@@ -57,10 +66,12 @@ happened and send it with notify. Do not add anything that did not happen."""
 
 
 class Robot:
-    """The pretend arm and table. Records every action in self.log; the safety lock lives in pick()."""
+    """The table and the arm. Records every action in self.log; the safety lock lives in pick().
+    arm: None for the pretend arm, or fetch(object) -> None when it was brought, or why it wasn't."""
 
-    def __init__(self, objects=None, confirm=None, notify=None):
+    def __init__(self, objects=None, confirm=None, notify=None, arm=None):
         self.objects = list(PRETEND_TABLE if objects is None else objects)
+        self.arm = arm
         self.confirm = confirm or (lambda name: input(f"Is it the {name}? (look and hold) [y/n] ").lower() == "y")
         self.send = notify or (lambda text: print(f"[to caregiver] {text}"))
         self.confirmed = None                                 # the one object the user said yes to
@@ -71,10 +82,26 @@ class Robot:
     def from_photo(cls, path, **kwargs):
         """The table as Nova (#5) sees it in a photo: each object at its box centre, 0-1 across and down."""
         import cv2
-        from eyereach import vision_nova
         image = cv2.imread(str(path))
         if image is None:
             sys.exit(f"could not read {path}")
+        return cls.from_image(image, **kwargs)
+
+    @classmethod
+    def from_camera(cls, camera, **kwargs):
+        """The same, from one picture taken now by the table camera (/dev/video2 or 2)."""
+        import cv2
+        capture = cv2.VideoCapture(int(camera) if str(camera).isdigit() else camera)
+        for _ in range(5):                                    # the first frames are often dark
+            ok, image = capture.read()
+        capture.release()
+        if not ok:
+            sys.exit(f"no picture from camera {camera}")
+        return cls.from_image(image, **kwargs)
+
+    @classmethod
+    def from_image(cls, image, **kwargs):
+        from eyereach import vision_nova
         height, width = image.shape[:2]
         objects = [{"name": d.name, "u": round((d.box[0] + d.box[2]) / 2 / width, 2),
                     "v": round((d.box[1] + d.box[3]) / 2 / height, 2)} for d in vision_nova.detect_objects(image)]
@@ -104,8 +131,18 @@ class Robot:
             if name not in {o["name"] for o in self.objects}:
                 self.log.append(("refused", name))
                 return f"Refused: there is no {name} on the table."
+            self.confirmed = None                             # a yes is for one try only
+            if self.arm:
+                spot = next(o for o in self.objects if o["name"] == name)
+                why = self.arm(spot)
+                if why:
+                    self.log.append(("pick failed", name, why))
+                    return f"The arm could not bring the {name}: {why}. Tell the person; do not retry on your own."
+                self.log.append(("pick", name))
+                self.holding = name
+                return f"Brought the {name} next to the person and let go of it. Call drop to finish."
             self.log.append(("pick", name))
-            self.holding, self.confirmed = name, None
+            self.holding = name
             return f"Holding the {name}."
 
         @tool
@@ -127,6 +164,18 @@ class Robot:
 
         return {"list_objects": list_objects, "ask_user_to_confirm": ask_user_to_confirm, "pick": pick,
                 "drop": drop, "notify": notify}
+
+
+def fetch_with(arm, *extra):
+    """fetch(object) for Robot(arm=...): runs brain/fetch.py go in the arm's Python."""
+    def fetch(spot):
+        flags = ["--virtual"] if arm == "virtual" else []
+        done = subprocess.run([ARM_PYTHON, str(ROOT / "brain" / "fetch.py"), "go", str(spot["u"]), str(spot["v"]),
+                               *flags, *extra], cwd=ROOT, stdout=subprocess.PIPE, text=True)
+        lines = done.stdout.strip().splitlines()
+        print(*lines, sep="\n")
+        return None if done.returncode == 0 else (lines[-1] if lines else "the arm program failed")
+    return fetch
 
 
 def default_model():
@@ -166,11 +215,23 @@ def run(task, robot, model=None, notes_dir=NOTES_DIR):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run the task agent with a pretend arm.")
+    parser = argparse.ArgumentParser(description="Run the task agent.")
     parser.add_argument("task", help='for example "bring me the pills"')
     parser.add_argument("--photo", help="take the objects from this photo with Nova instead of the pretend table")
+    parser.add_argument("--camera", help="take a picture with this table camera (/dev/video2 or 2) for Nova")
+    parser.add_argument("--arm", choices=["real", "virtual"], help="move an arm when picking (default: pretend)")
+    parser.add_argument("--grab-mm", default="50", help="passed to brain/fetch.py")
+    parser.add_argument("--travel-mm", default="120", help="passed to brain/fetch.py")
     args = parser.parse_args()
-    robot = Robot.from_photo(args.photo) if args.photo else Robot()
+    if args.arm == "real" and not (args.camera or args.photo):
+        sys.exit("--arm real needs --camera (or --photo from the calibrated table camera)")
+    arm = fetch_with(args.arm, "--grab-mm", args.grab_mm, "--travel-mm", args.travel_mm) if args.arm else None
+    if args.camera:
+        robot = Robot.from_camera(args.camera, arm=arm)
+    elif args.photo:
+        robot = Robot.from_photo(args.photo, arm=arm)
+    else:
+        robot = Robot(arm=arm)
     print(run(args.task, robot))
     print("\nwhat happened:", *robot.log, sep="\n  ")
 
