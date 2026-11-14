@@ -4,3 +4,4 @@ mediapipe>=0.10,<0.10.30   # 0.10.30 and later dropped mp.solutions (FaceMesh), 
 boto3
 deepagents>=0.7
 langchain-aws>=1.0
+photonhq-api        # Photon 2.0 (beta) client for services/photon/; needs Python 3.11+
