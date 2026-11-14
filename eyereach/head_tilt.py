@@ -4,8 +4,9 @@ No screen calibration: only "which way is the face turned, compared with when yo
 
     python3 -m eyereach.head_tilt          check it with your own head (no arm): prints each move and nod
 
-    turn left / right   -> the arm moves to your left / right
-    tilt up / down      -> the arm moves away from you / toward you
+    look left / right, or tilt the head left / right (ear toward the shoulder)
+                        -> the arm moves to your left / right (the stronger of the two counts)
+    look up / down      -> the arm moves away from you / toward you
     back to the centre  -> the arm stops
     a quick nod         -> pick up here, or let go if holding something
 
@@ -16,7 +17,8 @@ Safety and false triggers:
   head not turned sideways; then a NOD_GAP pause before another nod counts.
 - No face (or no head direction) gives no movement.
 Directions come from gaze_webcam.head_pose: yaw > 0 is the face turned toward the picture's right, which is the
-person's own left; pitch > 0 is up. FLIP_VERTICAL swaps up/down if that suits someone better.
+person's own left; pitch > 0 is up; roll > 0 is the head tilted to the person's own right (checked by turning a
+photo: +15 deg counter-clockwise gave roll +14.8). FLIP_VERTICAL swaps up/down if that suits someone better.
 """
 
 import math
@@ -43,6 +45,7 @@ class Tilt:
     held: float = 0.0            # 0..1: how far the current tilt is toward HOLD (for the screen)
     yaw: float = 0.0             # degrees from the centre (person's left is positive)
     pitch: float = 0.0           # degrees from the centre (up is positive)
+    roll: float = 0.0            # degrees from the centre (tilted to the person's right is positive)
 
 
 class HeadTilt:
@@ -56,14 +59,14 @@ class HeadTilt:
         self.last_nod = -math.inf
         self.last_seen = None        # ((yaw, pitch), time) of the last face, for GRACE
 
-    def set_centre(self, yaw, pitch):
+    def set_centre(self, yaw, pitch, roll=0.0):
         """Degrees; usually the median of a couple of seconds of looking straight ahead."""
-        self.centre = (yaw, pitch)
+        self.centre = (yaw, pitch, roll)
         self.tilt_since = self.tilt_side = self.dip = None
         self.dip_done = False
 
     def update(self, pose_deg, now):
-        """pose_deg: (yaw, pitch) in degrees, or None with no face. Returns a Tilt."""
+        """pose_deg: (yaw, pitch) or (yaw, pitch, roll) in degrees, or None with no face. Returns a Tilt."""
         if pose_deg is None and self.last_seen is not None and now - self.last_seen[1] <= GRACE:
             pose_deg = self.last_seen[0]               # a short drop-out: carry on as before
         elif pose_deg is not None:
@@ -73,9 +76,12 @@ class HeadTilt:
             self.dip_done = False
             return Tilt(label="no face" if pose_deg is None else "centre")
         yaw, pitch = pose_deg[0] - self.centre[0], pose_deg[1] - self.centre[1]
+        roll = (pose_deg[2] - self.centre[2]) if len(pose_deg) > 2 else 0.0
         nod = self._nod(yaw, pitch, now)
-        out = Tilt(nod=nod, yaw=yaw, pitch=pitch)
-        side = (abs(yaw) > self.dead and (1 if yaw > 0 else -1), abs(pitch) > self.dead and (1 if pitch > 0 else -1))
+        out = Tilt(nod=nod, yaw=yaw, pitch=pitch, roll=roll)
+        # left/right: looking (yaw) or tilting the head (roll), whichever is stronger; as "to the left" degrees
+        lefty = yaw if abs(yaw) >= abs(roll) else -roll
+        side = (abs(lefty) > self.dead and (1 if lefty > 0 else -1), abs(pitch) > self.dead and (1 if pitch > 0 else -1))
         if side == (False, False) or nod or self.dip is not None:
             self.tilt_since = self.tilt_side = None   # centred, or in the middle of a nod: don't move
             return out
@@ -86,7 +92,7 @@ class HeadTilt:
             out.label = "hold"
             return out
         # yaw > 0 (person's left) -> u down (the map's u = 0 is the person's left); up -> away (v up)
-        du = -max(0.0, abs(yaw) - self.dead) * (1 if yaw > 0 else -1)
+        du = -max(0.0, abs(lefty) - self.dead) * (1 if lefty > 0 else -1)
         dv = max(0.0, abs(pitch) - self.dead) * (1 if pitch > 0 else -1) * (-1 if self.flip else 1)
         size = math.hypot(du, dv)
         out.direction = (du / size, dv / size)
@@ -102,7 +108,7 @@ class HeadTilt:
             if self.dip_done:
                 self.dip_done = pitch < -NOD_BACK        # still tilted down: it's a move, not a new nod
                 return False
-            if pitch < -NOD_DEG / 2 and abs(yaw) < NOD_SIDE and now - self.last_nod > NOD_GAP:
+            if pitch < -NOD_DEG / 2 and abs(yaw) < NOD_SIDE and now - self.last_nod > NOD_GAP:  # (roll: see update)
                 self.dip = (now, pitch)                # going down: maybe a nod
             return False
         start, deepest = self.dip
@@ -130,7 +136,7 @@ def live(seconds=60.0, camera="/dev/video0"):
     while len(poses) < 30 and time.monotonic() - start < 15:
         gaze.features(cam.read())
         if gaze.pose is not None:
-            poses.append(np.degrees(gaze.pose[:2]))
+            poses.append(np.degrees(gaze.pose[:3]))
     if len(poses) < 30:
         print("No face found: move the camera so the whole face is in the picture.")
         return
@@ -141,8 +147,8 @@ def live(seconds=60.0, camera="/dev/video0"):
         while time.monotonic() < end:
             gaze.features(cam.read())
             now = time.monotonic()
-            t = head.update(None if gaze.pose is None else tuple(np.degrees(gaze.pose[:2])), now)
-            line = f"yaw {t.yaw:+5.1f}  pitch {t.pitch:+5.1f}   {t.label:20s}" + ("   NOD -> pick up / let go" if t.nod else "")
+            t = head.update(None if gaze.pose is None else tuple(np.degrees(gaze.pose[:3])), now)
+            line = f"yaw {t.yaw:+5.1f}  pitch {t.pitch:+5.1f}  roll {t.roll:+5.1f}   {t.label:20s}" + ("   NOD -> pick up / let go" if t.nod else "")
             if t.nod or t.label != last:
                 print(line, flush=True)
                 last = t.label

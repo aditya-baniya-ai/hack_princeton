@@ -107,8 +107,8 @@ and keep still for about two seconds; that is your centre.
 
 | Do this | The arm |
 |---|---|
-| Turn your head **left** / **right** | moves to your left / right |
-| Tilt your head **up** / **down** | moves away from you / toward you |
+| **Look** left / right, or **tilt** the head left / right (ear toward the shoulder) | moves to your left / right (the stronger of the two counts) |
+| Look **up** / **down** | moves away from you / toward you |
 | Turn further | moves faster (up to the speed limits: 60 mm/s, 40 mm/s carrying) |
 | Come back to the centre, or lose the face | stops |
 | **Nod** (a quick dip and back) | picks up where it is; the next nod lets go there |
@@ -120,6 +120,11 @@ and keep still for about two seconds; that is your centre.
   on-screen buttons still work with a mouse click for a helper, and "Stop" by voice always works.
 - **FIX MY AIM** (or **C**) sets the centre again. The screen shows "Centre: still", "Hold the tilt..." or "Moving
   left", and the ray from your nose points to where the arm is heading.
+- **Left is left on the screen:** your face is shown as a mirror, cut so it is always in the middle of its picture
+  (black past the camera's edges), with LEFT, RIGHT, AWAY (top) and TOWARD YOU (bottom) on its sides; the one you are
+  moving toward lights up. The map is turned the same way in this mode: away from you at the top, near you at the
+  bottom, so tilting up moves the arm up on the screen. Checked: your right is the map's right is the arm's move to
+  your right (the arm faces you).
 - **Check it with your own head first (no arm):** `~/eyereach_venv/bin/python -m eyereach.head_tilt` prints the angles,
   each move and each nod. The thresholds are at the top of `eyereach/head_tilt.py`; `FLIP_VERTICAL = True` swaps up
   and down.

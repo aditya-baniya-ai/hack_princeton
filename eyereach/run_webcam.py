@@ -109,15 +109,22 @@ def on_screen(point, slack=0.15):
     return min(max(x, 0.0), W - 1.0), min(max(y, 0.0), H - 1.0)
 
 
+MAP = {"away_up": False}       # tilt control: "away from you" at the top of the map, like tilting the head up
+
+
 def to_area(point):
     """Screen pixel -> (u, v) on the table map, or None outside the map."""
     left, top, right, bottom = PLAY
     u, v = (point[0] - left) / (right - left), (point[1] - top) / (bottom - top)
+    if MAP["away_up"]:
+        v = 1 - v
     return (u, v) if 0 <= u <= 1 and 0 <= v <= 1 else None
 
 
 def to_screen(u, v):
     left, top, right, bottom = PLAY
+    if MAP["away_up"]:
+        v = 1 - v
     return int(left + u * (right - left)), int(top + v * (bottom - top))
 
 
@@ -188,10 +195,37 @@ def blank():
     return np.full((H, W, 3), BG, np.uint8)
 
 
+_CROP = {"centre": None}       # the face's smoothed (x, y, size) in the camera picture, for face_crop
+
+
+def face_crop(frame, pts):
+    """The camera picture cut around the face, so the face is always in the middle (black past the picture's
+    edges), following it smoothly. Returns (cropped picture, the face points moved into it, its (w, h))."""
+    fh, fw = frame.shape[:2]
+    if pts is not None:
+        (x0, y0), (x1, y1) = pts.min(0), pts.max(0)
+        target = np.array([(x0 + x1) / 2, (y0 + y1) / 2, max(y1 - y0, (x1 - x0) * 0.75)])
+        last = _CROP["centre"]
+        _CROP["centre"] = target if last is None else 0.8 * last + 0.2 * target
+    centre = _CROP["centre"]
+    if centre is None:
+        return frame, pts, (fw, fh)
+    ch = int(min(max(centre[2] * 2.6, 140), fh * 1.5))     # the face fills about 40% of the height
+    cw = int(ch * 4 / 3)
+    pad = max(cw, ch)
+    big = cv2.copyMakeBorder(frame, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=(30, 24, 24))
+    x0, y0 = int(centre[0] - cw / 2), int(centre[1] - ch / 2)
+    crop = big[y0 + pad:y0 + pad + ch, x0 + pad:x0 + pad + cw]
+    return crop, (None if pts is None else pts - np.array([x0, y0], float)), (cw, ch)
+
+
 def face_panel(frame, gaze, ok, size):
-    """The mirrored face with its key points and the ray, and where the nose is on it (or None)."""
-    view = camera_view(frame, gaze.pts, size, ok, None, gaze.size)
-    nose = None if gaze.pts is None else in_view(gaze.pts[1], gaze.size, size)
+    """The mirrored face, centred, with its key points, and where the nose is on it (or None)."""
+    pts, frame_size = gaze.pts, gaze.size
+    if frame is not None:
+        frame, pts, frame_size = face_crop(frame, gaze.pts)
+    view = camera_view(frame, pts, size, ok, None, frame_size)
+    nose = None if pts is None else in_view(pts[1], frame_size, size)
     return view, nose
 
 
@@ -235,8 +269,9 @@ def draw(ctl, point, tracking, paused, fps, face=None):
     # the table map
     left, top, right, bottom = PLAY
     cv2.rectangle(canvas, (left, top), (right, bottom), (150, 110, 130), 2)
-    centered(canvas, "near you", (left + right) // 2, top - 0.012 * H, 0.55)
-    centered(canvas, "near the arm", (left + right) // 2, bottom + 0.035 * H, 0.55)
+    near, far = ("near you", "away from you (near the arm)")
+    centered(canvas, far if MAP["away_up"] else near, (left + right) // 2, top - 0.012 * H, 0.55)
+    centered(canvas, near if MAP["away_up"] else "near the arm", (left + right) // 2, bottom + 0.035 * H, 0.55)
     ring = int(scale(26))
     if ctl.target is not None:                             # the chosen spot
         t = to_screen(*ctl.target)
@@ -288,6 +323,17 @@ def draw(ctl, point, tracking, paused, fps, face=None):
         centered(canvas, "YOU", corner[0] + view.shape[1] // 2, corner[1] - scale(18), 0.8, WHITE, 2)
         centered(canvas, "Say Robot move left" if ctl.control_mode == "voice" else tilt_status(ctl), corner[0] + view.shape[1] // 2,
                  corner[1] + view.shape[0] + scale(35), 0.65, GOLD, 2)
+        if getattr(ctl, "tilt", False):                # which way is which, lit up while moving that way
+            label = getattr(ctl, "tilt_label", "") or ""
+            vw, vh = view.shape[1], view.shape[0]
+            for word, (x, y) in (("LEFT", (0.1, 0.5)), ("RIGHT", (0.9, 0.5)), ("AWAY", (0.5, 0.09)),
+                                 ("TOWARD YOU", (0.5, 0.86))):
+                on = word.lower() in label
+                size, thick = (0.6, 2) if on else (0.5, 1)
+                cx, cy = int(corner[0] + x * vw), int(corner[1] + y * vh)
+                tw, th = cv2.getTextSize(word, cv2.FONT_HERSHEY_SIMPLEX, scale(size), thickness(thick))[0]
+                cv2.rectangle(canvas, (cx - tw // 2 - 6, cy - th - 6), (cx + tw // 2 + 6, cy + 6), (30, 24, 24), -1)
+                centered(canvas, word, cx, cy, size, GOLD if on else WHITE, thick)
         if nose is not None and point is not None and not paused:
             draw_ray(canvas, (corner[0] + nose[0], corner[1] + nose[1]), point, time.monotonic())
 
@@ -430,7 +476,7 @@ def find_centre(camera, gaze, shown, voice, again=False):
         else:
             seen_since = seen_since or now
             if now - seen_since > 1.0:
-                poses.append(np.degrees(gaze.pose[:2]))
+                poses.append(np.degrees(gaze.pose[:3]))
         canvas = blank()
         centered(canvas, "Set your centre" if again else "Hello!", W // 2, 0.09 * H, 1.4, GOLD, 2)
         centered(canvas, "Look straight at the screen and keep still.", W // 2, 0.16 * H, 0.9, WHITE, 2)
@@ -455,7 +501,7 @@ def find_centre(camera, gaze, shown, voice, again=False):
             if len(poses) >= 15 and done >= 1.0:
                 centre = np.median(np.array(poses), axis=0)
                 voice.say("Ready. Turn your head to move the arm. Nod to pick up.")
-                return float(centre[0]), float(centre[1])
+                return float(centre[0]), float(centre[1]), float(centre[2])
         shown(canvas)
         if cv2.waitKey(1) & 0xFF == 27:
             return None
@@ -642,12 +688,13 @@ def main():
         head = None
         if args.control == "tilt":                     # no screen pointer: the head's tilt moves the arm
             ctl.movement, ctl.tilt = "follow", True
+            MAP["away_up"] = True                      # tilt up = away = up on the map, like the face picture
             centre = find_centre(camera, gaze, show, voice)
             if centre is None:
                 return
             head = HeadTilt()
             head.set_centre(*centre)
-            log.event("tilt centre", yaw=round(centre[0], 1), pitch=round(centre[1], 1))
+            log.event("tilt centre", yaw=round(centre[0], 1), pitch=round(centre[1], 1), roll=round(centre[2], 1))
         if args.voice:
             device = int(args.microphone) if args.microphone and args.microphone.isdigit() else args.microphone
             if device is None:                         # the speaker's microphone first, the webcam's as fallback
@@ -676,7 +723,7 @@ def main():
             now = time.monotonic()
             tilt = None
             if head is not None:                       # tilt control: a face is all it needs
-                tilt = head.update(None if gaze.pose is None else tuple(np.degrees(gaze.pose[:2])), now)
+                tilt = head.update(None if gaze.pose is None else tuple(np.degrees(gaze.pose[:3])), now)
                 tracking = gaze.pose is not None
                 point = None
                 if tracking:
@@ -787,7 +834,7 @@ def main():
                     if centre is None:
                         break
                     head.set_centre(*centre)
-                    log.event("tilt centre", yaw=round(centre[0], 1), pitch=round(centre[1], 1))
+                    log.event("tilt centre", yaw=round(centre[0], 1), pitch=round(centre[1], 1), roll=round(centre[2], 1))
                 else:
                     done = calibrate(camera, gaze, show, voice, args.dot_seconds, again=True, log=log)
                     if done is None:

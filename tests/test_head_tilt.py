@@ -158,3 +158,49 @@ class DropOutTest(unittest.TestCase):
         out, _ = run(h, [(None, 0.5)], start=t)                 # lost for longer
         self.assertEqual(out[-1].label, "no face")
         self.assertIsNone(out[-1].direction)
+
+
+class SidewaysTiltTest(unittest.TestCase):
+    def test_tilting_the_head_right_or_left_moves_right_or_left(self):
+        h = HeadTilt()
+        h.set_centre(0.0, 0.0, 0.0)
+        out, _ = run(h, [((0.0, 0.0, 20.0), 1.5)])          # ear toward the right shoulder
+        self.assertEqual(out[-1].label, "right")
+        self.assertGreater(out[-1].direction[0], 0.9)       # u up = the person's right
+        h = HeadTilt()
+        h.set_centre(0.0, 0.0, 0.0)
+        out, _ = run(h, [((0.0, 0.0, -20.0), 1.5)])
+        self.assertEqual(out[-1].label, "left")
+
+    def test_looking_right_and_tilting_right_agree(self):
+        h = HeadTilt()
+        h.set_centre(0.0, 0.0, 0.0)
+        out, _ = run(h, [((-20.0, 0.0, 0.0), 1.5)])         # look right (yaw < 0)
+        self.assertEqual(out[-1].label, "right")
+        h = HeadTilt()
+        h.set_centre(0.0, 0.0, 0.0)
+        out, _ = run(h, [((-12.0, 0.0, 25.0), 1.5)])        # both: the stronger (tilt) wins, same way
+        self.assertEqual(out[-1].label, "right")
+
+
+class ScreenAgreesWithTheHeadTest(unittest.TestCase):
+    def test_tilt_up_goes_up_on_the_map_and_right_goes_right(self):
+        from eyereach import run_webcam
+        run_webcam.MAP["away_up"] = True
+        try:
+            h = HeadTilt()
+            h.set_centre(0.0, 0.0, 0.0)
+            up, _ = run(h, [((0.0, 20.0, 0.0), 1.5)])               # tilt up = away (v up)
+            h2 = HeadTilt()
+            h2.set_centre(0.0, 0.0, 0.0)
+            right, _ = run(h2, [((-20.0, 0.0, 0.0), 1.5)])          # look right
+            mid = run_webcam.to_screen(0.5, 0.5)
+            go_up = run_webcam.to_screen(0.5, 0.5 + 0.2 * up[-1].direction[1])
+            go_right = run_webcam.to_screen(0.5 + 0.2 * right[-1].direction[0], 0.5)
+            self.assertLess(go_up[1], mid[1])                       # higher on the screen
+            self.assertGreater(go_right[0], mid[0])                 # further right on the screen
+            back = run_webcam.to_area(run_webcam.to_screen(0.3, 0.8))
+            self.assertAlmostEqual(back[0], 0.3, places=2)
+            self.assertAlmostEqual(back[1], 0.8, places=2)                # (whole pixels)
+        finally:
+            run_webcam.MAP["away_up"] = False
