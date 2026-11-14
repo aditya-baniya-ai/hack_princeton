@@ -1,6 +1,6 @@
 """EyeReach: drive the arm with gaze instead of a hand.
 
-The arm driver (game/arm_link.py) already follows a
+The arm driver (brain/arm_link.py) already follows a
 table point (u, v) and can grab and release. Here that point comes from where the user looks.
 Hold your gaze on the claw's spot to grab; hold it on the drop zone to let go.
 """

@@ -20,7 +20,7 @@ device, and it has not been tested with people who have disabilities.
 ```
 eyereach/run_webcam.py     webcam -> iris gaze -> a point on the table map (gaze_webcam.py)
    ↓  eyereach/eye_control.py: dwell to confirm, grab, hold, drop
-game/arm_link.py           follow a table point, grab, release (or a pretend arm)
+brain/arm_link.py          follow a table point, grab, release (or a pretend arm)
    ↓
 brain/arm.py               inverse kinematics in mm, joint limits, never below the table
    ↓
@@ -48,8 +48,8 @@ How the eye control behaves:
 ```
 eyereach/      the eye control: gaze_webcam.py (iris gaze, calibration), eye_control.py (dwell, grab, drop),
                run_webcam.py (the screen app)
-game/          arm_link.py: the arm follows a point, grabs and releases
 brain/         arm.py: the robot maths, plus commands to check it (test, where, go, home)
+               arm_link.py: the arm follows a point, grabs and releases (or a pretend arm)
 gestures/      gestures.py: the ROS 2 link that moves the joints
 launch/        eyereach.sh (start the arm and the app), stop.sh (stop everything), fix_turns.py
 firmware/      servo_check: an Arduino test that stands the arm up and waves

@@ -18,17 +18,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "brain"))
 import arm  # noqa: E402  (also makes ../gestures importable)
 
-HOVER_HEIGHT = 60.0      # mm: fingertips this high while moving around (a game can
+HOVER_HEIGHT = 60.0      # mm: fingertips this high while moving around (a caller can
                          # set its own: robot.hover)
 MAX_TILT = 30            # degrees the gripper may tilt from straight down while gliding
                          # high up (it can't reach far pointing straight down up there)
 TOUCH_HEIGHT = 20.0      # mm: fingertips this high at the bottom of a whack
 NEAR, FAR = 80.0, 220.0   # mm: closest and farthest the gripper goes from the base
-                          # (it can reach 60-227 mm at every height the games use)
+                          # (it can reach 60-227 mm at every height callers use)
 SIDE = math.radians(75)  # the furthest the base turns left or right
 MAX_SPEED = 1.5          # rad/s: fastest any joint moves while following the hand
 MAX_GLIDE = 250.0        # mm/s: fastest the gripper slides across the table
-CARRY_GLIDE = 90.0       # mm/s: while carrying something (games slow it down) ...
+CARRY_GLIDE = 90.0       # mm/s: while carrying something (callers slow it down) ...
 CARRY_SPEED = 0.8        # rad/s: ... and the fastest any joint moves then
 WHACK_TIME = 0.30        # seconds down, and the same back up
 GRAB_HEIGHT = 15.0       # mm: fingertips this high to grab a ball off the table
@@ -149,7 +149,7 @@ class ArmBase:
         return True
 
     def grab(self, height=GRAB_HEIGHT):
-        """Go down, close the gripper, come back up (without freezing the game: the
+        """Go down, close the gripper, come back up (without freezing the app: the
         steps happen in run_steps). Returns False if it can't right now."""
         return self.down_and_up(height, closed=True)
 
