@@ -273,3 +273,14 @@ class GripperFeedbackTest(unittest.TestCase):
         robot.grip_future.set_result(handle)
         robot.read_gripper()
         handle.cancel_goal_async.assert_called_once()
+
+
+class DroppedPhraseTest(unittest.TestCase):
+    def test_dropped_phrases_are_reported_once(self):
+        from eyereach.voice_commands import VoiceInput
+        listener = VoiceInput()
+        listener.dropped.put_nowait(("robot move lift", "not a command", 0.91))
+        listener.dropped.put_nowait(("robot move left", "not sure (0.62, needs 0.80)", 0.62))
+        self.assertEqual([why for _, why, _ in listener.poll_dropped()],
+                         ["not a command", "not sure (0.62, needs 0.80)"])
+        self.assertEqual(listener.poll_dropped(), [])

@@ -12,6 +12,7 @@ import re
 import threading
 import time
 
+MIN_CONFIDENCE = 0.70   # every word of a command must reach this (was 0.80: too many real commands dropped)
 MODEL = Path.home() / '.eyereach' / 'models' / 'vosk-model-small-en-us-0.15'
 PHRASES = {
     'stop': 'stop', 'robot stop': 'stop',
@@ -49,6 +50,7 @@ class VoiceInput:
         self.done = threading.Event()
         self.thread = None
         self.last_heard = ''
+        self.dropped = queue.Queue(maxsize=16)    # (text, why, lowest word confidence) heard but not acted on
 
     def start(self):
         self.thread = threading.Thread(target=self._run, name='eyereach-speech', daemon=True)
@@ -110,15 +112,32 @@ class VoiceInput:
                         stopped = True
                     if final:
                         words = result.get('result', [])
-                        confident = bool(words) and min(w.get('conf', 0) for w in words) >= 0.8
+                        lowest = min((w.get('conf', 0) for w in words), default=0.0)
+                        confident = bool(words) and lowest >= MIN_CONFIDENCE
                         self.last_heard = text
                         if confident and action is not None and action != 'stop' and not stopped:
                             self._emit(VoiceEvent(action, text, started or stamp, stamp))
+                        elif text and text != '[unk]' and not stopped:
+                            # Heard but not acted on: say why, so the person isn't left guessing
+                            why = 'not a command' if action is None else f'not sure ({lowest:.2f}, needs {MIN_CONFIDENCE:.2f})'
+                            try:
+                                self.dropped.put_nowait((text, why, round(lowest, 2)))
+                            except queue.Full:
+                                pass
                         started, stopped = None, False
         except Exception as exc:
             self.error = str(exc)
         finally:
             self.status = 'Unavailable'
+
+    def poll_dropped(self):
+        """Phrases heard since the last call that were not acted on: [(text, why, lowest confidence)]."""
+        items = []
+        while True:
+            try:
+                items.append(self.dropped.get_nowait())
+            except queue.Empty:
+                return items
 
     def poll(self):
         items = []
@@ -154,6 +173,8 @@ def main():
         while not listener.error:
             for event in listener.poll():
                 print(f'{event.text} -> {event.action}', flush=True)
+            for text, why, lowest in listener.poll_dropped():
+                print(f'{text} -> ignored: {why}', flush=True)
             time.sleep(0.05)
         raise SystemExit(listener.error)
     except KeyboardInterrupt:

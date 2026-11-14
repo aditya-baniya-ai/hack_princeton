@@ -582,6 +582,9 @@ def main():
                     ctl.press("stop", now)
                     microphone_failed = True
                     log.event("voice unavailable", message=listener.error)
+                for text, why, lowest in listener.poll_dropped():
+                    ctl.heard_command = f"{text} - {why}"
+                    log.event("voice heard", text=text, why=why, lowest_confidence=lowest)
                 events = listener.poll()
                 # STOP wins over every other recognized action in this batch.
                 if any(event.action == "stop" for event in events):

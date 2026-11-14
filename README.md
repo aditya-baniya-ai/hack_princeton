@@ -93,8 +93,8 @@ The main features (details in the sections below):
 - **Test everything in one command:** `launch/test_all.sh` (16 checks, never moves the real arm).
 - **One command:** `launch/eyereach.sh` loads `.env`, finds the screen, checks the gripper and joints, starts the arm
   and the app, and adds voice commands when installed. `launch/setup_jetson.sh` sets up a Jetson in one go.
-- **Voice:** offline commands (Vosk), Amazon Nova 2 Sonic conversation (`launch/talk.sh`), and the speaker's
-  microphone used first with the webcam's as fallback.
+- **Voice:** offline commands (Vosk), Amazon Nova 2 Sonic conversation (`launch/talk.sh`); the webcam's microphone
+  first, the speaker's as fallback; every phrase heard is shown, with why it was ignored.
 - **Speaker volume on screen:** QUIETER / LOUDER buttons by gaze or mouse, `+`/`-` for the helper.
 - **Amazon Nova 2 Lite** object finding and the **LangChain deepagents** task agent (not yet driving the real arm).
 
@@ -124,6 +124,11 @@ mode switching, bounded spoken moves, and interruptible pickup with robot feedba
 See [Jetson voice setup and commands](docs/jetson-voice.md) for installation and testing.
 Use `bash launch/setup_voice.sh` once, then `launch/eyereach.sh --no-arm --voice`.
 `launch/eyereach.sh` turns voice commands on by itself once they are installed; `--no-voice` keeps vision only.
+
+**When a voice command doesn't work,** the bottom of the screen says what was heard and why it was ignored, for
+example `Heard: robot move lift - not a command` or `Heard: robot move left - not sure (0.62, needs 0.70)`; the session
+log keeps them as `voice heard`. Every word must reach 0.70 confidence (lowered from 0.80, which dropped too many real
+commands); "Stop" always acts at once. Practise without the robot: `~/eyereach_venv/bin/python -m eyereach.voice_commands`.
 
 ## How it works
 
@@ -219,11 +224,12 @@ launch/talk.sh --list                 # audio devices; pick with --microphone N 
 - It stops listening while it speaks, so it can't hear itself through the speaker.
 - Sonic only answers while an audio input is open, so even `--text` sends silence while it waits.
 - It runs in `~/eyereach_agent_venv` (Python 3.12, which the Sonic SDK needs); `launch/setup_jetson.sh` installs it.
-- **Microphone: the speaker's first, the webcam's as fallback** (both voice programs, `eyereach/audio_devices.py`).
-  A USB microphone that isn't a camera (the speaker's "USB PnP Audio Device") is used when it opens at 16 kHz;
-  otherwise, or when another program already has it, the webcam (the system default). PulseAudio doesn't list the
-  speaker's microphone (that card only offers output profiles), so it is opened directly. `python3 -m
-  eyereach.audio_devices` shows the choice; `EYEREACH_MIC=C920` (in `.env` or the terminal) forces the webcam.
+- **Microphone: the webcam's first, the speaker's as fallback** (both voice programs, `eyereach/audio_devices.py`).
+  Measured with the same speech played through the speaker: the C920 heard it twice as loud with word confidence 0.95,
+  the speaker's microphone 0.87 (voice commands were often dropped on it). The webcam goes through PulseAudio and is
+  made the default source each start; the speaker's microphone (which PulseAudio doesn't list) is opened directly
+  when there is no webcam. `python3 -m eyereach.audio_devices` shows the choice; `EYEREACH_MIC=PnP` forces the
+  speaker's.
 - Sound devices: `pactl set-default-source` / `pactl set-default-sink` choose the system microphone and speaker
   (`pactl list short sources`, `pactl list short sinks` list them).
 
@@ -234,7 +240,7 @@ eyereach/      the control: gaze_webcam.py (face direction, iris gaze, calibrati
                eye_control.py (pointer following, dwell, double blink, pick up, let go), run_webcam.py (the screen app),
                session_log.py (the session log and its summary)
                vision_nova.py (Amazon Nova 2 Lite: names the objects on the table and gives each a box)
-               voice_commands.py (offline Vosk commands), audio_devices.py (speaker mic first, webcam as fallback)
+               voice_commands.py (offline Vosk commands), audio_devices.py (webcam mic first, speaker's as fallback)
                speaker_volume.py (the speaker volume behind QUIETER / LOUDER)
 agent/         task_agent.py: the deepagents task agent ("bring me the pills": plan, confirm, pick, drop, tell)
                voice_sonic.py: talk with Amazon Nova 2 Sonic (microphone in, spoken answers out)
