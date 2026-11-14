@@ -12,7 +12,7 @@
 # Ctrl+C here) stops everything. On the real arm, hold it first: it goes limp when it starts and stops.
 
 # ---- settings: change them here ----
-VOICE=true     # optional offline speech; run launch/setup_voice.sh once, or pass --no-voice
+VOICE=true      # offline voice commands, used only once launch/setup_voice.sh is done; --no-voice turns off
 TRAVEL_MM=120   # fingertips this high above the table (mm) at start-up and while moving
 GRAB_MM=50      # fingertips this high above the table (mm) when picking up (the app never goes below 30)
 REUSE=true      # reuse the saved calibration (the first run, or a new screen size, still calibrates);
@@ -25,17 +25,31 @@ REPO="$(dirname "$HERE")"
 SIM=false
 NO_ARM=false
 APP_ARGS=(--travel-mm "$TRAVEL_MM" --grab-mm "$GRAB_MM")   # given first, so options typed after win
-[ "$VOICE" = true ] && APP_ARGS+=(--voice)
 for arg in "$@"; do
   case "$arg" in
     --sim) SIM=true ;;
     --no-arm) NO_ARM=true ;;
     --calibrate) REUSE=false ;;
     --reuse) REUSE=true ;;
+    --voice) VOICE=true ;;
+    --no-voice) VOICE=false ;;
     *) APP_ARGS+=("$arg") ;;
   esac
 done
 [ "$REUSE" = true ] && APP_ARGS+=(--reuse)
+
+# Voice only when it is installed: asking the app for voice without it makes it press STOP at start.
+VOICE_MODEL_DIR="$HOME/.eyereach/models/vosk-model-small-en-us-0.15"
+VOICE_PY=python3
+[ -x "$HOME/eyereach_venv/bin/python" ] && VOICE_PY="$HOME/eyereach_venv/bin/python"
+if [ "$VOICE" = true ]; then
+  if [ -d "$VOICE_MODEL_DIR" ] && "$VOICE_PY" -c "import vosk, sounddevice" > /dev/null 2>&1; then
+    APP_ARGS+=(--voice)
+    echo "Voice commands: on"
+  else
+    echo "Voice commands: off (not installed: run 'bash launch/setup_voice.sh' once, and plug in a microphone)"
+  fi
+fi
 
 # Keys and settings (AWS for Nova and the task agent) from the repo's .env, if there is one.
 # .env is git-ignored: never commit it.

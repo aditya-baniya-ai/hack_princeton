@@ -383,6 +383,12 @@ launch/eyereach.sh               # the real arm
 launch/eyereach.sh --calibrate   # the real arm, with a new calibration
 ```
 
+**One command runs everything that is connected:** `launch/eyereach.sh` loads `.env` (AWS keys), finds the screen,
+checks the gripper and joints, starts the real arm, opens the gripper, and runs the head/eye pointer with the
+double blink, using the saved calibration. Voice commands join in by themselves once `bash launch/setup_voice.sh`
+has been run and a microphone is plugged in (otherwise it says "Voice commands: off" and runs without them).
+Nova object finding and the task agent are not wired to the arm yet (the agent's tools are still pretend).
+
 The launcher has its settings at the top of `launch/eyereach.sh`: it **reuses the saved calibration** (only the
 first run, or a new screen size or pointer mode, calibrates; FIX MY AIM or C recalibrates any time), and the
 fingertips **travel 120 mm** above the table and **go down to 50 mm** to pick up (the gripper opens first, closes at
