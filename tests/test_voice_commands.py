@@ -6,7 +6,7 @@ import types
 import unittest
 from unittest.mock import Mock, patch
 
-from eyereach.voice_commands import PHRASES, VoiceInput, VoiceEvent, parse
+from eyereach.voice_commands import BothInputs, PHRASES, SonicInput, VoiceInput, VoiceEvent, parse
 from eyereach.eye_control import GuidedControl, arm_link
 
 
@@ -134,6 +134,28 @@ class DriverTest(unittest.TestCase):
             self.robot.run_steps()
         self.assertIn('timed out', self.robot.error)
         self.assertIsNone(self.robot.operation)
+
+
+class SonicInputTest(unittest.TestCase):
+    def test_commands_go_through_the_whitelist(self):
+        sonic = SonicInput()
+        sonic.read(['{"status": "Listening"}\n', 'a warning, not JSON\n',
+                    '{"command": "a little left", "heard": "move it a bit to the left"}\n',
+                    '{"command": "throw it at the wall"}\n', '{"command": "stop", "heard": "hold on"}\n'])
+        events = sonic.poll()
+        self.assertEqual([e.action for e in events], [('jog', 'left', 5.0), 'stop'])
+        self.assertEqual(events[0].text, 'move it a bit to the left (Sonic)')
+        self.assertEqual(sonic.status, 'Unavailable')                # the program ended
+        self.assertEqual(sonic.error, 'Sonic stopped')
+
+    def test_only_the_offline_listener_owns_errors(self):
+        offline = Mock(status='Listening', error=None, poll=Mock(return_value=['a']))
+        sonic = Mock(status='Unavailable', error='Sonic stopped', poll=Mock(return_value=['b']))
+        both = BothInputs(offline, sonic)
+        self.assertEqual((both.status, both.error, both.poll()), ('Listening', None, ['a', 'b']))
+        both.close()
+        sonic.close.assert_called_once()
+        offline.close.assert_called_once()
 
 
 class MicrophoneWorkerTest(unittest.TestCase):

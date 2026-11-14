@@ -6,6 +6,9 @@ Only complete, exact commands execute. All actions except STOP need the word
 import argparse
 from dataclasses import dataclass
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 import queue
 import re
@@ -13,6 +16,9 @@ import threading
 import time
 
 MODEL = Path.home() / '.eyereach' / 'models' / 'vosk-model-small-en-us-0.15'
+REPO = Path(__file__).resolve().parent.parent
+# Nova 2 Sonic's SDK needs Python 3.12: it runs as its own program in the agent's environment
+AGENT_PYTHON = Path(os.environ.get('EYEREACH_AGENT_PYTHON', Path.home() / 'eyereach_agent_venv' / 'bin' / 'python'))
 PHRASES = {
     'stop': 'stop', 'robot stop': 'stop',
     'robot use voice': 'voice', 'robot use vision': 'vision',
@@ -132,6 +138,83 @@ class VoiceInput:
         self.done.set()
         if self.thread:
             self.thread.join(timeout=2)
+
+
+class SonicInput:
+    """Free speech through Nova 2 Sonic ("move it a bit to the left"), next to VoiceInput.
+
+    agent/voice_sonic.py --commands prints one JSON line per command; each command goes through the
+    same whitelist (parse) and the same checks in the app as an exact spoken phrase. It needs the
+    network, so STOP never depends on it: the offline VoiceInput and the gaze STOP button stay on."""
+
+    def __init__(self, python=AGENT_PYTHON):
+        self.python = python
+        self.status = 'Starting Sonic'
+        self.error = None
+        self.events = queue.Queue(maxsize=16)
+        self.process = None
+        self.last_heard = ''
+
+    def start(self):
+        try:
+            self.process = subprocess.Popen([str(self.python), '-u', '-m', 'agent.voice_sonic', '--commands'],
+                                            cwd=REPO, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                            stderr=sys.stderr, text=True)
+        except OSError as exc:
+            self.error, self.status = f'Sonic did not start: {exc}', 'Unavailable'
+            return self
+        threading.Thread(target=self.read, args=(self.process.stdout,), name='eyereach-sonic', daemon=True).start()
+        return self
+
+    def read(self, lines):
+        for line in lines:
+            try:
+                message = json.loads(line)
+            except ValueError:
+                continue                                  # not for us (a warning, say)
+            if 'status' in message:
+                self.status = message['status']
+            if 'error' in message:
+                self.error = message['error']
+            action = parse('robot ' + str(message.get('command', '')))
+            if action is not None:
+                now = time.monotonic()
+                self.last_heard = message.get('heard') or message['command']
+                try:
+                    self.events.put_nowait(VoiceEvent(action, f"{self.last_heard} (Sonic)", now, now))
+                except queue.Full:
+                    pass                                  # old commands are dropped anyway
+        self.status = 'Unavailable'
+        self.error = self.error or 'Sonic stopped'
+
+    def poll(self):
+        items = []
+        while True:
+            try:
+                items.append(self.events.get_nowait())
+            except queue.Empty:
+                return items
+
+    def close(self):
+        if self.process and self.process.poll() is None:
+            self.process.terminate()
+
+
+class BothInputs:
+    """The offline listener (it owns STOP and the microphone status) plus Sonic's free speech."""
+
+    def __init__(self, offline, sonic):
+        self.offline, self.sonic = offline, sonic
+
+    status = property(lambda self: self.offline.status)
+    error = property(lambda self: self.offline.error)    # only the offline one stops the arm when it fails
+
+    def poll(self):
+        return self.offline.poll() + self.sonic.poll()
+
+    def close(self):
+        self.sonic.close()
+        self.offline.close()
 
 
 def main():

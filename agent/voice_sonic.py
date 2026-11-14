@@ -4,13 +4,17 @@
     python -m agent.voice_sonic --text "Hello"      one typed sentence; the spoken reply is saved to a WAV
                                                     file (no microphone or speaker needed)
     python -m agent.voice_sonic --list              list the audio devices
+    python -m agent.voice_sonic --speak             the eye app's voice: reads each line from stdin aloud
+    python -m agent.voice_sonic --commands          the eye app's free speech: "move it a bit to the left" ->
+                                                    one JSON line on stdout, {"command": "a little left", ...}
 
 Runs in ~/eyereach_agent_venv: the Sonic SDK (aws_sdk_bedrock_runtime) needs Python 3.12.
 Speech-to-speech in one model, on Amazon Bedrock (event format from Amazon's Nova 2 Sonic sample).
 
 Half duplex: while Sonic is speaking, silence is sent instead of the microphone, so it never hears
-itself through the speaker. It only talks: it does not move the arm. STOP for the arm stays offline
-(the gaze STOP button or the offline voice "Stop" in the eye app), so it works without the network.
+itself through the speaker. It never moves the arm itself: --commands only prints a command from a fixed
+list, and the eye app checks it like any spoken command. STOP for the arm stays offline (the gaze STOP
+button or the offline voice "Stop" in the eye app), so it works without the network.
 
 Environment variables (from .env):
     AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY   Bedrock access
@@ -42,6 +46,28 @@ SYSTEM_PROMPT = (
     "look at the STOP button.")
 
 
+READ_ALOUD_PROMPT = ("Read the user's text aloud exactly as written, word for word, in a calm, warm voice. "
+                     "Do not add, answer or change anything.")
+
+# Every command is "robot " + one of these in eyereach/voice_commands.py, so the eye app's whitelist decides.
+COMMANDS = ["stop", "use voice", "use vision", "grab", "release", "resume", "fix my aim"] + \
+    [f"{size} {way}" for size in ("move", "a little") for way in ("left", "right", "toward me", "away from me")]
+COMMAND_TOOL = {"toolSpec": {
+    "name": "robot_command",
+    "description": "Send one command to the robot arm the person controls.",
+    "inputSchema": {"json": json.dumps({"type": "object", "required": ["command"], "properties": {   # a string: Sonic
+        "command": {"type": "string", "enum": COMMANDS, "description": "the command closest to what they asked"}}})}}}
+COMMAND_PROMPT = (
+    "You are the voice of EyeReach, a robot arm for a person who cannot move their arms. When they ask the arm to "
+    "do something, call robot_command with the closest command, one per call. For example: 'grab that' or 'pick "
+    "it up' is grab; 'drop it' or 'let it go' is release; 'go left' is move left; 'a bit to the left' or 'a "
+    "tiny bit left' is a little left; 'closer to me' is move toward me; 'wait' or 'hold on' is stop; 'keep "
+    "going' is resume; 'talk to you instead' or 'use my voice' is use voice; 'use my eyes' is use vision. "
+    "Left and right are as the person sees it. If you are not sure what they mean, ask one short question "
+    "instead of guessing. Do not call the tool for small talk. After a command, reply in at most five words, "
+    "like 'Okay, a little left.' The arm may still refuse, so never say it is done. Never say the word robot.")
+
+
 def event(name, **body):
     return {"event": {name: body}}
 
@@ -49,8 +75,10 @@ def event(name, **body):
 class SonicSession:
     """One conversation with Nova Sonic over the bidirectional stream."""
 
-    def __init__(self, model=MODEL, region=REGION, voice=VOICE, system=SYSTEM_PROMPT, on_text=print):
+    def __init__(self, model=MODEL, region=REGION, voice=VOICE, system=SYSTEM_PROMPT, on_text=print,
+                 tools=None, on_tool=None):
         self.model, self.region, self.voice, self.system, self.on_text = model, region, voice, system, on_text
+        self.tools, self.on_tool = tools, on_tool     # on_tool(name, arguments) -> the result Sonic is told
         self.prompt = str(uuid.uuid4())
         self.audio_name = str(uuid.uuid4())
         self.stream = None
@@ -77,11 +105,13 @@ class SonicSession:
         self.active = True
         self.reader = asyncio.create_task(self._read())
         await self.send(event("sessionStart", inferenceConfiguration={"maxTokens": 1024, "topP": 0.9, "temperature": 0.7}))
+        tools = {"toolUseOutputConfiguration": {"mediaType": "application/json"},
+                 "toolConfiguration": {"tools": self.tools, "toolChoice": {"auto": {}}}} if self.tools else {}
         await self.send(event("promptStart", promptName=self.prompt,
                               textOutputConfiguration={"mediaType": "text/plain"},
                               audioOutputConfiguration={"mediaType": "audio/lpcm", "sampleRateHertz": OUT_RATE,
                                                         "sampleSizeBits": 16, "channelCount": 1, "voiceId": self.voice,
-                                                        "encoding": "base64", "audioType": "SPEECH"}))
+                                                        "encoding": "base64", "audioType": "SPEECH"}, **tools))
         await self.text(self.system, role="SYSTEM", interactive=False)
 
     async def text(self, words, role="USER", interactive=True):
@@ -89,6 +119,15 @@ class SonicSession:
         await self.send(event("contentStart", promptName=self.prompt, contentName=name, type="TEXT",
                               interactive=interactive, role=role, textInputConfiguration={"mediaType": "text/plain"}))
         await self.send(event("textInput", promptName=self.prompt, contentName=name, content=words))
+        await self.send(event("contentEnd", promptName=self.prompt, contentName=name))
+
+    async def tool_result(self, tool_use_id, result):
+        name = str(uuid.uuid4())
+        await self.send(event("contentStart", promptName=self.prompt, contentName=name, interactive=False,
+                              type="TOOL", role="TOOL",
+                              toolResultInputConfiguration={"toolUseId": tool_use_id, "type": "TEXT",
+                                                            "textInputConfiguration": {"mediaType": "text/plain"}}))
+        await self.send(event("toolResult", promptName=self.prompt, contentName=name, content=json.dumps(result)))
         await self.send(event("contentEnd", promptName=self.prompt, contentName=name))
 
     async def start_audio(self):
@@ -136,6 +175,10 @@ class SonicSession:
                         self.on_text(f"You:      {words}")
                     elif self.role == "ASSISTANT" and self.show:
                         self.on_text(f"EyeReach: {words}")
+                elif "toolUse" in ev and self.on_tool:
+                    use = ev["toolUse"]
+                    result = self.on_tool(use["toolName"], json.loads(use.get("content") or "{}"))
+                    asyncio.create_task(self.tool_result(use["toolUseId"], result))
                 elif "audioOutput" in ev:
                     await self.audio_out.put(base64.b64decode(ev["audioOutput"]["content"]))
                 elif "contentEnd" in ev:
@@ -152,9 +195,9 @@ class SonicSession:
             self.finished.set()
 
 
-async def say_text(words, out_path, timeout=30.0):
-    """Send one typed sentence and save Sonic's spoken reply as a WAV file. Returns seconds of speech."""
-    session = SonicSession()
+async def reply_pcm(words, system=SYSTEM_PROMPT, timeout=30.0):
+    """Send one typed sentence -> Sonic's spoken reply (16-bit mono PCM at OUT_RATE)."""
+    session = SonicSession(system=system, on_text=lambda text: None)
     await session.start()
     await session.text(words)
     await session.start_audio()                # Sonic only answers while an audio input is open
@@ -173,7 +216,12 @@ async def say_text(words, out_path, timeout=30.0):
                 break
     quiet.cancel()
     await session.end(audio_open=True)
-    pcm = b"".join(chunks)
+    return b"".join(chunks)
+
+
+async def say_text(words, out_path, timeout=30.0):
+    """Send one typed sentence and save Sonic's spoken reply as a WAV file. Returns seconds of speech."""
+    pcm = await reply_pcm(words, timeout=timeout)
     with wave.open(out_path, "wb") as f:
         f.setnchannels(1)
         f.setsampwidth(2)
@@ -182,8 +230,46 @@ async def say_text(words, out_path, timeout=30.0):
     return len(pcm) / (2 * OUT_RATE)
 
 
-async def talk(microphone=None, speaker=None):
-    """Microphone to Sonic, Sonic to the speaker, until Ctrl+C."""
+def speak_lines(speaker=None, lines=sys.stdin):
+    """The eye app's voice: read each line from stdin aloud with Sonic. While one sentence is being made,
+    newer ones replace older ones (only the latest instruction matters)."""
+    import queue
+    import threading
+    import sounddevice as sd
+    waiting = queue.Queue()
+    threading.Thread(target=lambda: [waiting.put(line.strip()) for line in lines] + [waiting.put(None)],
+                     daemon=True).start()
+    ended = False
+    while not ended:
+        sentence = waiting.get()
+        while not waiting.empty():                        # only the newest one; None marks the end of input
+            newer = waiting.get()
+            ended, sentence = (True, sentence) if newer is None else (ended, newer)
+        if sentence is None:
+            return
+        if not sentence:
+            continue
+        try:
+            pcm = asyncio.run(reply_pcm(sentence, READ_ALOUD_PROMPT))
+            with sd.RawOutputStream(samplerate=OUT_RATE, channels=1, dtype="int16", device=speaker) as out:
+                out.write(pcm)
+        except Exception as error:                     # say why on stderr; the app keeps going without it
+            print(f"Sonic could not speak: {type(error).__name__}: {error}", file=sys.stderr, flush=True)
+
+
+def command_out(heard):
+    """on_tool for --commands: one JSON line on stdout for the eye app."""
+    def on_tool(name, arguments):
+        command = arguments.get("command")
+        if name != "robot_command" or command not in COMMANDS:
+            return {"status": "unknown command"}
+        print(json.dumps({"command": command, "heard": heard[0]}), flush=True)
+        return {"status": "sent to the arm; it may refuse if the move is not possible right now"}
+    return on_tool
+
+
+async def talk(microphone=None, speaker=None, commands=False):
+    """Microphone to Sonic, Sonic to the speaker, until Ctrl+C. commands: free speech for the eye app."""
     import sounddevice as sd
     loop = asyncio.get_running_loop()
     mic = asyncio.Queue(maxsize=200)
@@ -192,10 +278,19 @@ async def talk(microphone=None, speaker=None):
     def heard(data, frames, when, status):
         loop.call_soon_threadsafe(lambda: mic.full() or mic.put_nowait(bytes(data)))
 
-    session = SonicSession()
+    if commands:                                        # stdout is for the app: everything else to stderr
+        heard = [""]
+
+        def on_text(line):
+            if line.startswith("You:"):
+                heard[0] = line[4:].strip()
+            print(line, file=sys.stderr, flush=True)
+        session = SonicSession(system=COMMAND_PROMPT, on_text=on_text, tools=[COMMAND_TOOL], on_tool=command_out(heard))
+    else:
+        session = SonicSession()
     await session.start()
     await session.start_audio()
-    print("Listening. Talk to EyeReach; Ctrl+C ends.")
+    print(json.dumps({"status": "Listening"}) if commands else "Listening. Talk to EyeReach; Ctrl+C ends.", flush=True)
 
     async def send_microphone():
         silence = bytes(2 * CHUNK)
@@ -214,7 +309,8 @@ async def talk(microphone=None, speaker=None):
         listening = sd.RawInputStream(samplerate=IN_RATE, blocksize=CHUNK, channels=1, dtype="int16",
                                       device=microphone, callback=heard)
     except Exception as error:                     # busy (another program has it) or unplugged: the webcam
-        print(f"Microphone {microphone} didn't open ({error}); using the webcam (system default) instead.")
+        print(f"Microphone {microphone} didn't open ({error}); using the webcam (system default) instead.",
+              file=sys.stderr)
         listening = sd.RawInputStream(samplerate=IN_RATE, blocksize=CHUNK, channels=1, dtype="int16",
                                       device=None, callback=heard)
     with listening:
@@ -226,6 +322,8 @@ async def talk(microphone=None, speaker=None):
             for task in tasks:
                 task.cancel()
             await session.end(audio_open=True)
+    if commands:
+        print(json.dumps({"error": "Sonic stream ended"}), flush=True)
 
 
 def device(value):
@@ -240,6 +338,8 @@ def main():
                                              "else the webcam's; see eyereach/audio_devices.py)")
     parser.add_argument("--speaker", help="output device number or name (default: the system's)")
     parser.add_argument("--list", action="store_true", help="list audio devices and exit")
+    parser.add_argument("--speak", action="store_true", help="read each line from stdin aloud (the eye app's voice)")
+    parser.add_argument("--commands", action="store_true", help="free speech -> JSON commands on stdout (the eye app)")
     args = parser.parse_args()
     if args.list:
         import sounddevice as sd
@@ -248,6 +348,9 @@ def main():
     if not (os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("AWS_SECRET_ACCESS_KEY")):
         print("No AWS keys in the environment: load .env first (set -a; . ./.env; set +a).")
         return 1
+    if args.speak:
+        speak_lines(device(args.speaker))
+        return 0
     if args.text:
         seconds = asyncio.run(say_text(args.text, args.out))
         print(f"Reply: {seconds:.1f} s of speech saved to {args.out}" if seconds else "No spoken reply came back.")
@@ -258,9 +361,9 @@ def main():
         from eyereach.audio_devices import pick_microphone
         microphone = pick_microphone()
     try:
-        asyncio.run(talk(microphone, device(args.speaker)))
+        asyncio.run(talk(microphone, device(args.speaker), args.commands))
     except KeyboardInterrupt:
-        print("\nBye.")
+        print("\nBye.", file=sys.stderr)
     return 0
 
 

@@ -28,7 +28,7 @@ import numpy as np
 
 from eyereach import eye_control
 from eyereach.session_log import SessionLog
-from eyereach.voice_commands import VoiceInput, MODEL
+from eyereach.voice_commands import AGENT_PYTHON, BothInputs, MODEL, REPO, SonicInput, VoiceInput
 from eyereach.gaze_webcam import Camera, GazeMap, IrisGaze, OneEuro, camera_view, in_view
 
 W, H = 1280, 720                                # the picture size; set_size() changes it to the screen's
@@ -255,16 +255,33 @@ def draw(ctl, point, tracking, paused, fps, face=None):
 # ---- talking -------------------------------------------------------------------------------------
 
 class Voice:
-    """Says sentences out loud (speech-dispatcher's spd-say), without waiting. Quiet if it's missing."""
+    """Says sentences out loud, without waiting: Amazon Nova 2 Sonic's voice with sonic=True (agent/voice_sonic.py
+    --speak, in the agent's Python 3.12), else speech-dispatcher's spd-say, also if Sonic stops. Quiet if neither."""
 
-    def __init__(self, on=True):
-        self.on = on and shutil.which("spd-say") is not None
+    def __init__(self, on=True, sonic=False):
+        self.sonic = None
+        if on and sonic and AGENT_PYTHON.exists():
+            try:
+                self.sonic = subprocess.Popen([str(AGENT_PYTHON), "-u", "-m", "agent.voice_sonic", "--speak"],
+                                              cwd=REPO, stdin=subprocess.PIPE, text=True)
+            except OSError:
+                pass
+        self.on = on and (self.sonic is not None or shutil.which("spd-say") is not None)
         self.last = None
 
     def say(self, sentence):
         if not self.on or not sentence or sentence == self.last:
             return
         self.last = sentence
+        if self.sonic is not None and self.sonic.poll() is None:
+            try:
+                self.sonic.stdin.write(" ".join(sentence.split()) + "\n")
+                self.sonic.stdin.flush()
+                return
+            except OSError:
+                self.sonic = None                             # Sonic stopped: spd-say from now on
+        if shutil.which("spd-say") is None:
+            return
         quiet = dict(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.Popen(["spd-say", "-C"], **quiet).wait()                # stop the last sentence
         subprocess.Popen(["spd-say", "-r", "-25", sentence], **quiet)
@@ -449,6 +466,10 @@ def main():
     parser.add_argument("--microphone", help="input device index or name (default: system input)")
     parser.add_argument("--list-microphones", action="store_true", help="list input devices and exit")
     parser.add_argument("--quiet", action="store_true", help="no voice")
+    parser.add_argument("--sonic-voice", action="store_true",
+                        help="speak with Amazon Nova 2 Sonic (needs ~/eyereach_agent_venv and AWS keys)")
+    parser.add_argument("--sonic", action="store_true",
+                        help="with --voice: also understand free speech with Amazon Nova 2 Sonic (STOP stays offline)")
     parser.add_argument("--grab-mm", type=float, default=eye_control.GRAB_MM,
                         help=f"fingertips this high above the table when picking up (default {eye_control.GRAB_MM:.0f}, "
                              f"never below {eye_control.LOWEST_GRAB_MM:.0f})")
@@ -469,7 +490,7 @@ def main():
     size = None if args.windowed else screen_size()
     if size:
         set_size(*size)
-    camera, gaze, voice = Camera(args.camera), IrisGaze(args.pointer), Voice(on=not args.quiet and not args.voice)
+    camera, gaze, voice = Camera(args.camera), IrisGaze(args.pointer), Voice(on=not args.quiet and not args.voice, sonic=args.sonic_voice)
     cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL | cv2.WINDOW_FREERATIO)
     cv2.resizeWindow(WINDOW, W, H)
     if not args.windowed:
@@ -510,6 +531,8 @@ def main():
                 from eyereach.audio_devices import pick_microphone
                 device = pick_microphone()
             listener = VoiceInput(args.voice_model, device).start()
+            if args.sonic:
+                listener = BothInputs(listener, SonicInput().start())
         microphone_failed = False
         clicks = []
 
@@ -618,6 +641,8 @@ def main():
     finally:
         if listener:
             listener.close()
+        if voice.sonic is not None:
+            voice.sonic.terminate()
         log.close()
         cv2.destroyAllWindows()
         gaze.close()
