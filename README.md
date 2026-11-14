@@ -193,18 +193,18 @@ Plug the OpenCR's USB into the Jetson, turn on the 12 V power, then `ls /dev/tty
 
 ### 8. Install MediaPipe (the eye tracker), once
 
-It goes in its own environment, `~/game_venv`, so nothing else on the Jetson changes. `launch/eyereach.sh` uses it
+It goes in its own environment, `~/eyereach_venv`, so nothing else on the Jetson changes. `launch/eyereach.sh` uses it
 automatically when it exists.
 
 ```bash
-python3 -m venv --system-site-packages ~/game_venv
-python3 -c "import site; print(site.getusersitepackages())" > ~/game_venv/lib/python3.10/site-packages/user_site.pth
-~/game_venv/bin/pip install --no-deps mediapipe==0.10.18
-~/game_venv/bin/pip install absl-py attrs flatbuffers "protobuf>=4.25.3,<5" sentencepiece
-~/game_venv/bin/python -c "import mediapipe, cv2, numpy; print('mediapipe', mediapipe.__version__, 'numpy', numpy.__version__)"
+python3 -m venv --system-site-packages ~/eyereach_venv
+python3 -c "import site; print(site.getusersitepackages())" > ~/eyereach_venv/lib/python3.10/site-packages/user_site.pth
+~/eyereach_venv/bin/pip install --no-deps mediapipe==0.10.18
+~/eyereach_venv/bin/pip install absl-py attrs flatbuffers "protobuf>=4.25.3,<5" sentencepiece
+~/eyereach_venv/bin/python -c "import mediapipe, cv2, numpy; print('mediapipe', mediapipe.__version__, 'numpy', numpy.__version__)"
 ```
 
-NumPy must still be 1.x. To undo all of it: `rm -rf ~/game_venv`.
+NumPy must still be 1.x. To undo all of it: `rm -rf ~/eyereach_venv`.
 
 ## Run it with the arm
 

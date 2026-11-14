@@ -24,7 +24,7 @@ done
 
 # MediaPipe lives in its own environment on the Jetson (see the README), if it's set up
 PYTHON=python3
-[ -x "$HOME/game_venv/bin/python" ] && PYTHON="$HOME/game_venv/bin/python"
+[ -x "$HOME/eyereach_venv/bin/python" ] && PYTHON="$HOME/eyereach_venv/bin/python"
 cd "$REPO"
 
 if [ "$NO_ARM" = true ]; then
