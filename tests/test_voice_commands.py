@@ -17,9 +17,18 @@ class ParserTest(unittest.TestCase):
         self.assertEqual(parse('Robot grab the item'), 'pick up')
         self.assertEqual(parse('robot release the item'), 'let go')
         self.assertEqual(parse('Stop!'), 'stop')
-        for text in ('move left', 'grab', 'do not robot grab', 'robot move left then right',
-                     'robot move left [unk]', 'robot move up', 'robot go faster', 'hello'):
+        for text in ('do not robot grab', 'robot move left then right', 'move left then right', 'use voice',
+                     'robot move left [unk]', 'robot move up', 'robot go faster', 'hello', 'fix my aim'):
             self.assertIsNone(parse(text), text)
+
+    def test_short_forms_only_count_in_voice_mode(self):
+        from eyereach.voice_commands import needs_voice_mode
+        self.assertEqual(parse('move left'), ('jog', 'left', 20.0))     # short forms parse ...
+        self.assertEqual(parse('grab'), 'pick up')
+        for text in ('move left', 'grab', 'release the item', 'resume'):
+            self.assertTrue(needs_voice_mode(text), text)              # ... but only voice mode acts on them
+        for text in ('robot move left', 'robot use voice', 'stop', 'Stop!'):
+            self.assertFalse(needs_voice_mode(text), text)
 
     def test_all_supported_phrases_are_parseable(self):
         for phrase, action in PHRASES.items():
@@ -40,8 +49,7 @@ class VoiceRoutingTest(unittest.TestCase):
     def test_hands_free_mode_switch_and_no_competing_gaze_or_blink(self):
         self.ctl.voice('voice', 1)
         self.robot.halt.assert_called_once()
-        self.assertFalse(self.ctl.live_enabled)
-        self.ctl.voice('resume', 2)
+        self.assertTrue(self.ctl.live_enabled)        # voice mode is ready at once: no 'resume' needed
         self.ctl.step(('map', (0.9, 0.2)), now=3, double_blink=True)
         self.robot.follow.assert_not_called()
         self.robot.grab.assert_not_called()

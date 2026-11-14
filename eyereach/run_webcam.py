@@ -31,7 +31,7 @@ import numpy as np
 from eyereach import eye_control, speaker_volume
 from eyereach.head_tilt import DEAD, NOSE_DEPTH, REACH, STEADY, HeadTilt, nose_angles
 from eyereach.session_log import SessionLog
-from eyereach.voice_commands import VoiceInput, MODEL
+from eyereach.voice_commands import VoiceInput, MODEL, needs_voice_mode
 from eyereach.gaze_webcam import Camera, GazeMap, IrisGaze, OneEuro, camera_view, in_view
 
 W, H = 1280, 720                                # the picture size; set_size() changes it to the screen's
@@ -854,6 +854,10 @@ def main():
                     double = False
                 elif not paused and not listener.error:
                     for event in events:
+                        if needs_voice_mode(event.text) and ctl.control_mode != "voice":
+                            ctl.heard_command = event.text + " - say Robot first (or Robot use voice)"
+                            log.event("voice command", text=event.text, accepted=False, why="short form in vision mode")
+                            continue
                         accepted = ctl.voice(event.action, now, event.started, event.heard)
                         ctl.heard_command = event.text + (" - accepted" if accepted else " - ignored")
                         log.event("voice command", text=event.text, accepted=accepted)

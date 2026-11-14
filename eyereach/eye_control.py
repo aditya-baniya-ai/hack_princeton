@@ -257,12 +257,15 @@ class GuidedControl:
             r.halt()
             self.control_mode = name
             self.target, self.then, self.phase = None, None, "waiting"
-            self.live_enabled = False
+            # voice mode is ready at once (the arm only moves on a spoken command); back to vision waits
+            # for MOVE AGAIN, so the nose can't make the arm jump to where it points
+            self.live_enabled = name == "voice"
             self.holding = bool(r.closed)
             r.carrying(self.holding)
             self.accept_after = now
             self.dwell = Dwell(self.dwell.seconds)
-            self.say.append(f"{name.title()} mode ready. Use MOVE AGAIN to enable movement.")
+            self.say.append("Voice mode. Say move left, move right, move closer or move away." if name == "voice" else
+                            "Vision mode. Say Robot resume, or look at MOVE AGAIN, to follow your nose.")
             self.events.append(("control mode", {"mode": name, "by": how}))
         elif name == "pick up" and r.grab(self.grab_mm):
             self.target = None

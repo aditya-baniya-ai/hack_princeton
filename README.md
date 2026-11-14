@@ -165,8 +165,11 @@ See [Jetson voice setup and commands](docs/jetson-voice.md) for installation and
 Use `bash launch/setup_voice.sh` once, then `launch/eyereach.sh --no-arm --voice`.
 `launch/eyereach.sh` turns voice commands on by itself once they are installed; `--no-voice` keeps vision only.
 
-**Voice or vision, never both.** Say "Robot use voice" (or click USE VOICE), then "Robot resume", and only spoken
-commands move the arm: the nose and nods are ignored. "Robot use vision" goes back: then "Robot move left/right/..." is
+**Voice or vision, never both.** Say "Robot use voice" (or click USE VOICE) and only spoken commands move the arm,
+straight away: the nose and nods are ignored. In voice mode "robot" can be left out: "move left", "move right", "move
+closer" / "move back" / "come closer", "move away" / "move forward", "a little left", "grab the item", "let go". (In
+vision mode those short forms are ignored, so ordinary talk can't move anything; switching mode always needs "Robot
+use voice" / "Robot use vision".) "Robot use vision" goes back: then "Robot move left/right/..." is
 ignored and the nose moves the arm. "Stop" always works, in both.
 
 **What listens and what talks:** commands are recognised offline by **Vosk** (`vosk-model-small-en-us-0.15`, only the

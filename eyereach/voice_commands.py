@@ -25,6 +25,23 @@ PHRASES = {
 for direction in ('left', 'right', 'toward me', 'away from me'):
     PHRASES[f'robot move {direction}'] = ('jog', direction, 20.0)
     PHRASES[f'robot a little {direction}'] = ('jog', direction, 5.0)
+# The way people actually say it: away/forward = away from me; closer/back = toward me
+for word, direction in (('away', 'away from me'), ('forward', 'away from me'), ('closer', 'toward me'),
+                        ('back', 'toward me')):
+    PHRASES[f'robot move {word}'] = ('jog', direction, 20.0)
+    PHRASES[f'robot a little {word}'] = ('jog', direction, 5.0)
+PHRASES['robot come closer'] = ('jog', 'toward me', 20.0)
+# Short forms without 'robot' (the app only accepts these in voice mode, which is chosen on purpose); switching
+# mode and fixing the aim always need 'robot', so ordinary talk can't change mode.
+for _phrase, _action in list(PHRASES.items()):
+    if _phrase.startswith('robot ') and _action not in ('voice', 'vision', 'aim', 'stop'):
+        PHRASES[_phrase[len('robot '):]] = _action
+
+
+def needs_voice_mode(text):
+    """A short form (no 'robot'), other than Stop: only acted on in voice mode."""
+    words = re.sub(r'[^a-z ]', '', text.lower()).split()
+    return bool(words) and words[0] != 'robot' and words != ['stop']
 
 
 def parse(text):
