@@ -103,6 +103,7 @@ class Gesturer(Node):
     def __init__(self):
         super().__init__("gesturer")
         self.base = None
+        self.joint_seen = {}   # monotonic arrival time, used by the EyeReach watchdog
         self.joints = {}       # latest angle of every joint, by name
         self.home_base = None  # where the base faced at the last home pose
         self.recording = []    # poses added with p, not saved yet
@@ -117,6 +118,7 @@ class Gesturer(Node):
 
     def on_joint_states(self, msg):
         self.joints.update(zip(msg.name, msg.position))
+        self.joint_seen.update((name, time.monotonic()) for name in msg.name)
         if "joint1" in msg.name:
             self.base = msg.position[msg.name.index("joint1")]
 

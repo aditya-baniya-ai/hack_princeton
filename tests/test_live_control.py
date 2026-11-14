@@ -65,34 +65,38 @@ class LiveControlTest(unittest.TestCase):
 class PickupSequenceTest(unittest.TestCase):
     def test_open_then_lower_then_close_then_lift_and_stay_closed(self):
         from eyereach import eye_control
-        from unittest.mock import patch
-        self.assertGreaterEqual(eye_control.HOVER_MM, 120.0)        # 12 cm: well clear of the table
-        self.assertGreaterEqual(eye_control.GRAB_MM, 50.0)
-        height = lambda joints: eye_control.arm_link.arm.forward(joints)[2]   # noqa: E731
         robot = eye_control.arm_link.VirtualArm()
         robot.hover = eye_control.HOVER_MM
         robot.start()
-        self.assertAlmostEqual(robot.gripper_area()[2], eye_control.HOVER_MM, places=4)
-        robot.closed = True                                          # left closed from before
-        start_plan = robot.plan
-        with patch.object(eye_control.arm_link.time, "monotonic", return_value=100.0):
-            self.assertTrue(robot.grab(eye_control.GRAB_MM))
-        self.assertFalse(robot.closed)                               # 1. opens first ...
-        self.assertIs(robot.plan, start_plan)                        # ... and hasn't started down yet
-        down_at, close_at, lift_at = [t for t, _ in robot.steps]
-        self.assertGreaterEqual(down_at - 100.0, 1.0)                # waits for it to open
-        with patch.object(eye_control.arm_link.time, "monotonic", return_value=down_at):
-            robot.run_steps()
-        self.assertAlmostEqual(height(robot.plan[0][1]), eye_control.GRAB_MM, places=4)   # 2. down, open
+        robot.closed = True
+        ready = [False]
+        robot.grip_ready = lambda closed: ready[0]
+        self.assertTrue(robot.grab(eye_control.GRAB_MM))
+        self.assertEqual(robot.stage, "Opening")
         self.assertFalse(robot.closed)
-        with patch.object(eye_control.arm_link.time, "monotonic", return_value=close_at):
-            robot.run_steps()
-        self.assertTrue(robot.closed)                                # 3. closes at the bottom
-        self.assertGreaterEqual(lift_at - close_at, 1.0)
-        with patch.object(eye_control.arm_link.time, "monotonic", return_value=lift_at):
-            robot.run_steps()
-        self.assertAlmostEqual(height(robot.plan[0][1]), eye_control.HOVER_MM, places=4)  # 4. lifts
-        self.assertTrue(robot.closed)                                # ... and stays closed
+        robot.run_steps()
+        self.assertEqual(robot.plan, [])  # no lowering before open feedback
+        ready[0] = True
+        robot.run_steps()
+        self.assertEqual(robot.stage, "Lowering")
+        self.assertAlmostEqual(eye_control.arm_link.arm.forward(robot.plan[0][1])[2], eye_control.GRAB_MM)
+        robot.run_steps()
+        self.assertFalse(robot.closed)  # no closing before measured arrival
+        robot.state = list(robot.plan[0][1])
+        ready[0] = False
+        robot.run_steps()
+        self.assertEqual(robot.stage, "Closing")
+        self.assertTrue(robot.closed)
+        robot.run_steps()
+        self.assertEqual(robot.stage, "Closing")
+        ready[0] = True
+        robot.run_steps()
+        self.assertEqual(robot.stage, "Lifting")
+        robot.state = list(robot.plan[0][1])
+        robot.run_steps()
+        self.assertFalse(robot.busy())
+        self.assertTrue(robot.closed)
+        self.assertAlmostEqual(eye_control.arm_link.arm.forward(robot.command)[2], robot.hover)
 
     def test_stays_closed_even_when_the_finger_check_says_nothing(self):
         for detected in (False, True):

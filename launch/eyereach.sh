@@ -12,6 +12,7 @@
 # Ctrl+C here) stops everything. On the real arm, hold it first: it goes limp when it starts and stops.
 
 # ---- settings: change them here ----
+VOICE=true     # optional offline speech; run launch/setup_voice.sh once, or pass --no-voice
 TRAVEL_MM=120   # fingertips this high above the table (mm) at start-up and while moving
 GRAB_MM=50      # fingertips this high above the table (mm) when picking up (the app never goes below 30)
 REUSE=true      # reuse the saved calibration (the first run, or a new screen size, still calibrates);
@@ -24,6 +25,7 @@ REPO="$(dirname "$HERE")"
 SIM=false
 NO_ARM=false
 APP_ARGS=(--travel-mm "$TRAVEL_MM" --grab-mm "$GRAB_MM")   # given first, so options typed after win
+[ "$VOICE" = true ] && APP_ARGS+=(--voice)
 for arg in "$@"; do
   case "$arg" in
     --sim) SIM=true ;;

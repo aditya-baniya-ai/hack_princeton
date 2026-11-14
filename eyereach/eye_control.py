@@ -178,6 +178,11 @@ class GuidedControl:
         self.then = None               # what to do on arriving: None or "let go" (the drop-off move)
         self.phase = "waiting"         # waiting, moving, there, picking, letting go
         self.holding = False
+        self.control_mode = "vision"
+        self.voice_available = False
+        self.accept_after = 0.0
+        self.last_voice = None
+        self.gaze_latches = set()
         self.hand_gaze_latched = False
         self.progress, self.looking = 0.0, None   # for drawing the filling ring
         self.closest = (math.inf, 0.0)    # (closest the claw got to the target, when): spots out of reach
@@ -188,12 +193,13 @@ class GuidedControl:
     def buttons(self):
         """The buttons on screen now, top to bottom: (name, label)."""
         hand = ("let go", "LET GO") if self.holding else ("pick up", "PICK UP")
-        toggle = ("resume", "MOVE AGAIN") if self.movement == "follow" and not self.live_enabled else ("stop", "STOP")
-        return [hand, toggle, ("aim", "FIX MY AIM")]
+        toggle = ("resume", "MOVE AGAIN") if not self.live_enabled else ("stop", "STOP")
+        mode = ("vision", "USE VISION") if self.control_mode == "voice" else ("voice", "USE VOICE")
+        return [hand, toggle, mode, ("aim", "FIX MY AIM")]
 
     def can(self, name):
         """Can this button do something right now? (Greyed out on screen when not.)"""
-        busy = self.phase in ("picking", "letting go")
+        busy = self.phase in ("picking", "letting go", "jogging", "recovering")
         if name == "pick up":
             return not busy and not self.holding and self.phase != "moving"
         if name == "let go":
@@ -201,18 +207,26 @@ class GuidedControl:
         if name in ("home", "dropoff"):
             return False
         if name == "stop":
-            return not busy and (self.phase == "moving" or self.movement == "follow")
+            return True
+        if name == "voice":
+            return not busy and self.voice_available
+        if name == "vision":
+            return not busy
         return not busy and name in ("aim", "resume")
 
     def instruction(self):
         """One short sentence: what to do now."""
+        if self.phase in ("picking", "letting go", "jogging", "recovering"):
+            return getattr(self.robot, "stage", "Working") + ". Look at STOP or say Stop."
+        if self.phase == "fault":
+            return "Arm stopped: " + str(self.robot.error)
+        if not self.live_enabled:
+            return "Stopped. Say Robot resume or look at MOVE AGAIN."
+        if self.control_mode == "voice":
+            return "Voice control. Say Robot move left, grab the item, or release the item."
         if self.phase == "moving":
-            return "Moving to the drop-off. Look at STOP to stop." if self.then else "Moving. Look at STOP to stop."
-        if self.phase in ("picking", "letting go"):
-            return {"picking": "Picking up ...", "letting go": "Letting go ..."}[self.phase]
+            return "Moving. Look at STOP or say Stop."
         if self.movement == "follow":
-            if not self.live_enabled:
-                return "Stopped. Look at MOVE AGAIN when ready."
             return "Point to move. Blink twice to let go." if self.holding else "Point to move. Blink twice to pick up."
         if self.holding:
             return ("Blink twice to let go here." if self.phase == "there" else
@@ -231,7 +245,20 @@ class GuidedControl:
         r = self.robot
         if not self.can(name):
             return
-        if name == "pick up" and r.grab(self.grab_mm):
+        if name in ("voice", "vision"):
+            self.gaze_latches.add("mode")
+            r.halt()
+            self.control_mode = name
+            self.target, self.then, self.phase = None, None, "waiting"
+            self.live_enabled = False
+            self.holding = bool(r.closed)
+            r.carrying(self.holding)
+            self.accept_after = now
+            self.dwell = Dwell(self.dwell.seconds)
+            self.say.append(f"{name.title()} mode ready. Use MOVE AGAIN to enable movement.")
+            self.events.append(("control mode", {"mode": name, "by": how}))
+        elif name == "pick up" and r.grab(self.grab_mm):
+            self.target = None
             self.phase = "picking"
             self.hand_gaze_latched = True
             self.say.append("Picking up.")
@@ -242,17 +269,63 @@ class GuidedControl:
             self.say.append("Letting go.")
             self.events.append(("let go", {"by": how}))
         elif name == "resume":
+            self.gaze_latches.add("motion")
+            r.error = None
+            self.phase = "waiting"
+            area = r.gripper_area()
+            if isinstance(r.hover, (int, float)) and area[2] < r.hover - 5:
+                if not r.recover():
+                    self.say.append("Cannot lift here. Ask the helper to check the arm.")
+                    return
+                self.phase = "recovering"
             self.live_enabled = True
             self.say.append("Ready to move.")
         elif name == "stop":
+            self.gaze_latches.add("motion")
+            r.halt()
+            self.holding = bool(r.closed)
+            r.carrying(self.holding)
+            self.accept_after = now
             self.live_enabled = False
+            self.dwell = Dwell(self.dwell.seconds)
             self.target, self.then, self.phase = None, None, "waiting"
             self.say.append("Stopped.")
             self.events.append(("stop", {}))
         elif name == "aim":
+            r.halt()
+            self.accept_after = now
             self.target, self.then, self.phase = None, None, "waiting"
             self.wants_calibration = True
             self.events.append(("fix aim", {}))
+
+    def voice(self, action, now, started=None, heard=None):
+        """Execute on the UI thread. Never queue a command through a busy operation."""
+        if action == "stop":
+            self.press("stop", now, how="voice")
+            return True
+        started = now if started is None else started
+        heard = now if heard is None else heard
+        if now - heard > 1.0 or started < self.accept_after:
+            return False
+        if self.last_voice is not None and action == self.last_voice[0] and now - self.last_voice[1] < 0.8:
+            return False
+        if self.phase in ("picking", "letting go", "jogging", "recovering"):
+            return False
+        if isinstance(action, tuple) and len(action) == 3 and action[0] == "jog":
+            if self.control_mode != "voice" or not self.live_enabled:
+                self.say.append("Select USE VOICE, then MOVE AGAIN first.")
+                return False
+            if not self.robot.jog(action[1], action[2]):
+                self.say.append("That movement is not available here.")
+                return False
+            self.phase, self.target = "jogging", None
+            self.events.append(("move", {"by": "voice", "direction": action[1], "mm": action[2]}))
+        else:
+            if action not in ("voice", "vision", "pick up", "let go", "resume", "aim") or not self.can(action):
+                return False
+            self.press(action, now, how="voice")
+        self.last_voice = (action, now)
+        return True
 
     def blink(self, now):
         """A double blink: pick up here, or let go if holding something."""
@@ -263,17 +336,36 @@ class GuidedControl:
         now = time.monotonic() if now is None else now
         r = self.robot
         r.update()
+        error = getattr(r, "error", None)
+        if isinstance(error, str) and error and self.phase != "fault":
+            self.press("stop", now)
+            self.phase = "fault"
+            self.say.append(error)
+            self.events.append(("arm fault", {"message": error}))
+        if self.control_mode == "voice":
+            double_blink = False
         if suspended:
             looking, double_blink = None, False
-            if self.phase in ("moving", "following"):
+            if self.phase in ("moving", "following", "jogging"):
+                r.halt()
                 self.target, self.then, self.phase = None, None, "waiting"
         if double_blink:
             self.blink(now)
+        if looking is not None:
+            for group, names in (("mode", ("voice", "vision")), ("motion", ("stop", "resume"))):
+                if looking[0] == "button" and looking[1] in names:
+                    if group in self.gaze_latches:
+                        looking = None
+                        break
+                else:
+                    self.gaze_latches.discard(group)
         hand_look = looking is not None and looking[0] == "button" and looking[1] in ("pick up", "let go")
         if looking is not None and not hand_look:
             self.hand_gaze_latched = False
         if hand_look and self.hand_gaze_latched:
             looking = None  # changing PICK UP to LET GO must not press it again
+        if self.control_mode == "voice" and looking is not None and looking[0] == "map":
+            looking = None
         if looking is not None and looking[0] == "button" and not self.can(looking[1]):
             looking = None                                 # a greyed-out button does nothing
         self.looking = looking
@@ -281,12 +373,12 @@ class GuidedControl:
             None if self.movement == "follow" and looking is not None and looking[0] == "map" else looking, now)
         if fired is not None and fired[0] == "button":
             self.press(fired[1], now)
-        elif fired is not None and self.phase not in ("picking", "letting go"):
+        elif fired is not None and self.live_enabled and self.control_mode == "vision" and self.phase not in ("picking", "letting go", "jogging", "recovering", "fault"):
             claw = r.gripper_area()[:2]
             if self.phase == "moving" or math.dist(fired[1], claw) > HERE:   # resting the eyes on the arm isn't a move
                 self.go(fired[1], "look", now)
                 self.say.append("Moving there.")
-        if self.movement == "follow" and self.phase not in ("moving", "picking", "letting go"):
+        if self.control_mode == "vision" and self.movement == "follow" and self.phase not in ("moving", "picking", "letting go", "jogging", "recovering", "fault"):
             if not suspended and self.live_enabled and looking is not None and looking[0] == "map":
                 if self.phase != "following":
                     self.events.append(("move", {"to": list(looking[1]), "by": "follow"}))
@@ -295,6 +387,7 @@ class GuidedControl:
                     self.task_started = now
                 r.follow(*self.target)
             elif self.phase == "following":
+                r.halt()
                 self.target, self.phase = None, "waiting"
         if self.phase == "moving":
             r.follow(*self.target)
@@ -310,7 +403,12 @@ class GuidedControl:
                     self.press("let go", now, how="dropoff")
                 else:
                     self.say.append("Arrived." if arrived else "That is as far as the arm can reach.")
+        elif self.phase in ("jogging", "recovering") and not r.busy():
+            self.phase = "there"
+            self.accept_after = now
+            self.say.append("Ready.")
         elif self.phase == "picking" and not r.busy():
+            self.accept_after = now
             # After a pick-up the gripper stays closed, holding what it grabbed, until the next double
             # blink (or LET GO) opens it. The finger-position guess at whether something is held
             # is only logged: on the real arm it said "nothing" even when it had the object.
@@ -323,6 +421,7 @@ class GuidedControl:
                                            "gripper": round(position, 4) if isinstance(position, (int, float)) else None}))
             self.say.append("Holding. Move to where you want to drop it, then blink twice.")
         elif self.phase == "letting go" and not r.busy():
+            self.accept_after = now
             self.holding = False
             r.carrying(False)
             self.phase = "waiting"
