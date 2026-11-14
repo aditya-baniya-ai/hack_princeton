@@ -701,8 +701,7 @@ def main():
             if head is not None:
                 double = False                         # tilt control: a nod picks up, blinks do nothing
                 if tilt.nod and not paused and ctl.control_mode == "vision":
-                    ctl.blink(now)
-                    ctl.events.append(("nod", {"holding": ctl.holding}))
+                    ctl.press("let go" if ctl.holding else "pick up", now, how="nod")
             voice_acted = False
             if listener:
                 ctl.voice_available = listener.status == "Listening" and not listener.error
