@@ -126,6 +126,7 @@ brain/         arm.py: the robot maths, plus commands to check it (test, where, 
 gestures/      gestures.py: the ROS 2 link that moves the joints
 launch/        eyereach.sh (start the arm and the app), stop.sh (stop everything), fix_turns.py
 firmware/      servo_check: an Arduino test that stands the arm up and waves
+tools/         measure.py: gaze accuracy on 9 test dots, and timed grab trials, into results/measurements.csv
 tests/         run with: python3 -m unittest discover -s tests
 dependencies.repos   the ROBOTIS code to download (setup step 5)
 ```
@@ -173,6 +174,20 @@ same AWS keys as above; `AGENT_MODEL_ID` changes it and `EYEREACH_NOTES` moves t
 python3 -m agent.task_agent "bring me the pills"                     # needs Python 3.11+ (Jetson: setup step 9)
 python3 -m agent.task_agent "bring me the snack" --photo table.jpg   # objects found by Nova in a photo
 ```
+
+### Measuring it (accuracy and grab times)
+
+```bash
+python3 -m tools.measure accuracy --person NAME --screen-cm 29 --distance-cm 55
+python3 -m tools.measure trials --person NAME
+```
+
+`accuracy` uses the saved calibration (or calibrates; `--recalibrate` forces it), then shows 9 test dots placed away
+from the calibration dots, so the error is measured on spots the tracker never learned. It prints the average and
+worst error in pixels, % of the screen width and degrees. `--screen-cm` is the width of the lit screen picture and
+`--distance-cm` is eyes to screen: measure both on each setup, they are only used for the degrees.
+`trials` is for a helper at the keyboard while the person uses the arm: Enter when they start, then `y` if the grab
+worked or `n` if not. Both add rows to `results/measurements.csv`.
 
 ## Hardware
 
