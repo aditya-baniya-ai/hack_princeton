@@ -88,8 +88,8 @@ SPOT = 0.06                    # the gaze may wander this far (map units) and st
 ARRIVED = 0.04                 # the claw is "there" this close to the chosen spot (map units)
 HERE = 0.08                    # looking this close to where the claw already is doesn't count as a new move
 EYE_SPEEDS = (60.0, 0.6, 40.0, 0.4)   # glide mm/s, joint rad/s; then the same while carrying
-HOVER_MM = 100.0               # fingertips 10 cm above the table at startup and while moving or carrying
-GRAB_MM = 40.0                 # fingertips this high above the table when picking up (2 cm was too close)
+HOVER_MM = 120.0               # fingertips 12 cm above the table at startup and while moving or carrying
+GRAB_MM = 50.0                 # fingertips this high above the table when picking up (2 and 4 cm were too close)
 LOWEST_GRAB_MM = 30.0          # --grab-mm can't go below this
 
 

@@ -12,8 +12,8 @@
 # Ctrl+C here) stops everything. On the real arm, hold it first: it goes limp when it starts and stops.
 
 # ---- settings: change them here ----
-TRAVEL_MM=100   # fingertips this high above the table (mm) at start-up and while moving
-GRAB_MM=40      # fingertips this high above the table (mm) when picking up (the app never goes below 30)
+TRAVEL_MM=120   # fingertips this high above the table (mm) at start-up and while moving
+GRAB_MM=50      # fingertips this high above the table (mm) when picking up (the app never goes below 30)
 REUSE=true      # reuse the saved calibration (the first run, or a new screen size, still calibrates);
                 # recalibrate any time with FIX MY AIM or C in the app, or start with --calibrate
 # -------------------------------------

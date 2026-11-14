@@ -81,9 +81,10 @@ uses the head for the rough spot and the eyes to fine-tune. Not yet measured on 
   Closing the eyes, losing tracking, or pausing stops new movement commands. An in-progress pickup/release
   finishes its existing sequence. STOP stays stopped until you look at MOVE AGAIN.
   Use `--movement dwell` for the previous destination-based mode.
-- **Pick up / let go anywhere:** the fingertips start and travel about 100 mm (10 cm) above the table,
+- **Pick up / let go anywhere:** the fingertips start and travel about 120 mm (12 cm) above the table,
   according to the robot model. Blink twice quickly, look at PICK UP for 0.65 s, or click it: the arm
-  lowers to 40 mm (4 cm), commands the gripper fully closed, waits one second for closure, then lifts back to
+  opens the gripper and waits one second, lowers to 50 mm (5 cm) with it open, closes it fully, waits one
+  second for closure, then lifts back to
   its travel height. It stays closed even if the joint-position estimate misses a small object.
   Move to any desired position, then blink twice or use LET GO to open there without lowering.
   Closed fingers do not prove an object was captured; session logs record the estimate separately.
@@ -92,9 +93,9 @@ uses the head for the rough spot and the eyes to fine-tune. Not yet measured on 
 - **Losing the eyes** (looking away, closing them, the face out of view) never starts anything.
 - **Helper keys:** Esc closes, C calibrates again, Space pauses, V hides/shows the face picture. Options:
   `--pointer head|eyes|both`, `--dwell 2`,
-  `--dot-seconds 3`, `--quiet` (no voice), `--reuse` (skip calibration), `--windowed`, `--grab-mm 40`
-  (pick-up fingertip height above the table in mm; default 40, never below 30), `--travel-mm 100` (start-up
-  and moving height; default 100). Heights come from the robot model, which assumes the arm's base sits
+  `--dot-seconds 3`, `--quiet` (no voice), `--reuse` (skip calibration), `--windowed`, `--grab-mm 50`
+  (pick-up fingertip height above the table in mm; default 50, never below 30), `--travel-mm 120` (start-up
+  and moving height; default 120). Heights come from the robot model, which assumes the arm's base sits
   directly on the table: if it stands on a plate, put the plate's thickness in `MOUNT_HEIGHT` in `brain/arm.py`.
 - **Measuring:** every session is logged to `~/.eyereach/sessions/` (calibration time and error, error at each
   dot, every move, pick-up and let-go, and the time of each pick-and-place). Add `--person NAME`, and for the
@@ -295,7 +296,8 @@ launch/eyereach.sh --calibrate   # the real arm, with a new calibration
 
 The launcher has its settings at the top of `launch/eyereach.sh`: it **reuses the saved calibration** (only the
 first run, or a new screen size or pointer mode, calibrates; FIX MY AIM or C recalibrates any time), and the
-fingertips **travel 100 mm** above the table and **go down to 40 mm** to pick up. Change `TRAVEL_MM`, `GRAB_MM` or
+fingertips **travel 120 mm** above the table and **go down to 50 mm** to pick up (the gripper opens first, closes at
+the bottom and stays closed until the next double blink or LET GO). Change `TRAVEL_MM`, `GRAB_MM` or
 `REUSE` there, or override one run with `--travel-mm 120`, `--grab-mm 50` or `--calibrate`.
 
 For the real arm: turn on the 12 V power, make sure the OpenCR's USB is in the Jetson, **hold the arm** (it goes limp

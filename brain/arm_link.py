@@ -185,10 +185,15 @@ class ArmBase:
         self.command, self.aim = list(up), (x, y)
         # Long enough that no joint goes faster than the speed limit (further down = longer)
         move = max(0.45, max(abs(d - u) for d, u in zip(down, up)) / self.speed)
-        self.send([down], [move])
-        self.steps = [(now + move + 0.05, lambda: self.set_gripper(closed)),
-                      (now + move + 0.05 + GRIPPER_WAIT, lambda: self.send([up], [move]))]
-        self.busy_until = now + 2 * move + 0.1 + GRIPPER_WAIT
+        opening = 0.0
+        if closed:                       # picking up: open first, and only go down once it is open
+            self.set_gripper(False)
+            opening = GRIPPER_WAIT
+        self.steps = [(now + opening, lambda: self.send([down], [move])),
+                      (now + opening + move + 0.05, lambda: self.set_gripper(closed)),
+                      (now + opening + move + 0.05 + GRIPPER_WAIT, lambda: self.send([up], [move]))]
+        self.busy_until = now + opening + 2 * move + 0.1 + GRIPPER_WAIT
+        self.run_steps()                 # going down starts now when there is nothing to open
         return True
 
     def open_here(self):
