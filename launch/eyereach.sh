@@ -37,6 +37,13 @@ for arg in "$@"; do
 done
 [ "$REUSE" = true ] && APP_ARGS+=(--reuse)
 
+# Keys and settings (AWS for Nova and the task agent) from the repo's .env, if there is one.
+# .env is git-ignored: never commit it.
+if [ -f "$REPO/.env" ]; then
+  set -a; . "$REPO/.env"; set +a
+  echo "Loaded settings from .env"
+fi
+
 # MediaPipe lives in its own environment on the Jetson (see the README), if it's set up
 PYTHON=python3
 [ -x "$HOME/eyereach_venv/bin/python" ] && PYTHON="$HOME/eyereach_venv/bin/python"
