@@ -99,6 +99,7 @@ class Dwell:
 
     def __init__(self, seconds=LOOK):
         self.seconds, self.thing, self.since = seconds, None, None
+        self.fired = False
 
     def update(self, thing, now):
         """thing: None, ("button", name) or ("map", (u, v)). Returns (progress 0..1, fired thing)."""
@@ -106,13 +107,14 @@ class Dwell:
                 (thing[1] == self.thing[1] if thing[0] == "button" else
                  math.dist(thing[1], self.thing[1]) <= SPOT))
         if not same:
+            self.fired = False
             self.thing, self.since = thing, (now if thing is not None else None)
             return 0.0, None
         progress = (now - self.since) / self.seconds
-        if progress >= 1.0:
-            fired, self.thing, self.since = self.thing, None, None   # look away and back to press again
-            return 1.0, fired
-        return progress, None
+        if progress >= 1.0 and not self.fired:
+            self.fired = True
+            return 1.0, self.thing
+        return min(1.0, progress), None
 
 
 class DoubleBlink:
@@ -151,12 +153,15 @@ class DoubleBlink:
 
 
 class GuidedControl:
-    """Eyes-only control of the arm with dwell buttons and a double blink. step() takes what the person
+    """Continuous or dwell-based control of the arm with dwell buttons and a double blink. step() takes what the person
     is looking at; self.say holds sentences for the voice; self.events holds (name, details) for the
     session log; self.wants_calibration asks the app to re-calibrate."""
 
-    def __init__(self, robot, look=LOOK, speeds=EYE_SPEEDS, home=HOME, dropoff=DROPOFF, grab_mm=GRAB_MM):
+    def __init__(self, robot, look=LOOK, speeds=EYE_SPEEDS, home=HOME, dropoff=DROPOFF, grab_mm=GRAB_MM, movement="dwell"):
         self.robot, self.dwell = robot, Dwell(look)
+        if movement not in ("follow", "dwell"):
+            raise ValueError("movement must be follow or dwell")
+        self.movement, self.live_enabled = movement, True
         self.grab_mm = max(grab_mm, 20.0)                  # never closer to the table than 20 mm
         self.release_mm = max(RELEASE_MM, self.grab_mm + 10)
         robot.set_speeds(*speeds)
@@ -174,7 +179,8 @@ class GuidedControl:
     def buttons(self):
         """The buttons on screen now, top to bottom: (name, label)."""
         hand = ("let go", "LET GO") if self.holding else ("pick up", "PICK UP")
-        return [hand, ("dropoff", "DROP-OFF"), ("home", "HOME"), ("stop", "STOP"), ("aim", "FIX MY AIM")]
+        toggle = ("resume", "MOVE AGAIN") if self.movement == "follow" and not self.live_enabled else ("stop", "STOP")
+        return [hand, ("dropoff", "DROP-OFF"), ("home", "HOME"), toggle, ("aim", "FIX MY AIM")]
 
     def can(self, name):
         """Can this button do something right now? (Greyed out on screen when not.)"""
@@ -186,7 +192,7 @@ class GuidedControl:
         if name == "dropoff":
             return not busy and self.holding and self.then is None
         if name == "stop":
-            return self.phase == "moving"
+            return not busy and (self.phase == "moving" or self.movement == "follow")
         return not busy
 
     def instruction(self):
@@ -195,6 +201,10 @@ class GuidedControl:
             return "Moving to the drop-off. Look at STOP to stop." if self.then else "Moving. Look at STOP to stop."
         if self.phase in ("picking", "letting go"):
             return {"picking": "Picking up ...", "letting go": "Letting go ..."}[self.phase]
+        if self.movement == "follow":
+            if not self.live_enabled:
+                return "Stopped. Look at MOVE AGAIN when ready."
+            return "Point to move. Blink twice to let go." if self.holding else "Point to move. Blink twice to pick up."
         if self.holding:
             return ("Blink twice to let go here, or look at DROP-OFF." if self.phase == "there" else
                     "Look where to put it and keep looking, or look at DROP-OFF.")
@@ -226,7 +236,11 @@ class GuidedControl:
         elif name == "home":
             self.go(self.home, "home", now)
             self.say.append("Going home.")
+        elif name == "resume":
+            self.live_enabled = True
+            self.say.append("Ready to move.")
         elif name == "stop":
+            self.live_enabled = False
             self.target, self.then, self.phase = None, None, "waiting"
             self.say.append("Stopped.")
             self.events.append(("stop", {}))
@@ -239,17 +253,22 @@ class GuidedControl:
         """A double blink: pick up here, or let go if holding something."""
         self.press("let go" if self.holding else "pick up", now, how="blink")
 
-    def step(self, looking, now=None, double_blink=False):
+    def step(self, looking, now=None, double_blink=False, suspended=False):
         """One frame. looking: None, ("button", name) or ("map", (u, v)). double_blink: one just ended."""
         now = time.monotonic() if now is None else now
         r = self.robot
         r.update()
+        if suspended:
+            looking, double_blink = None, False
+            if self.phase in ("moving", "following"):
+                self.target, self.then, self.phase = None, None, "waiting"
         if double_blink:
             self.blink(now)
         if looking is not None and looking[0] == "button" and not self.can(looking[1]):
             looking = None                                 # a greyed-out button does nothing
         self.looking = looking
-        self.progress, fired = self.dwell.update(looking, now)
+        self.progress, fired = self.dwell.update(
+            None if self.movement == "follow" and looking is not None and looking[0] == "map" else looking, now)
         if fired is not None and fired[0] == "button":
             self.press(fired[1], now)
         elif fired is not None and self.phase not in ("picking", "letting go"):
@@ -257,6 +276,16 @@ class GuidedControl:
             if self.phase == "moving" or math.dist(fired[1], claw) > HERE:   # resting the eyes on the arm isn't a move
                 self.go(fired[1], "look", now)
                 self.say.append("Moving there.")
+        if self.movement == "follow" and self.phase not in ("moving", "picking", "letting go"):
+            if not suspended and self.live_enabled and looking is not None and looking[0] == "map":
+                if self.phase != "following":
+                    self.events.append(("move", {"to": list(looking[1]), "by": "follow"}))
+                self.target, self.phase = looking[1], "following"
+                if self.task_started is None:
+                    self.task_started = now
+                r.follow(*self.target)
+            elif self.phase == "following":
+                self.target, self.phase = None, "waiting"
         if self.phase == "moving":
             r.follow(*self.target)
             u, v, _ = r.gripper_area()

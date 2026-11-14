@@ -184,6 +184,7 @@ class Camera:
             raise RuntimeError(f"Can't open the camera {source!r}")
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     def read(self):
         ok, frame = self.cap.read()

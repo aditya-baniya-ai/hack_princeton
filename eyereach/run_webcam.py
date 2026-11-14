@@ -7,12 +7,13 @@ it is running; the screen (and a voice) always says what to do next.
 1. It finds the face, then shows a yellow dot that glides around the screen. Pointing the nose at it
    (or, with --pointer eyes, following it with the eyes) teaches the computer where you point (about
    40 seconds). Your face is shown with a ray coming out of the nose, so you can see where you point.
-2. Look at a spot on the table map and keep looking: the arm slowly goes there.
+2. Point at the table map: the arm follows immediately, within its speed limits.
 3. Blink twice quickly to pick up where the arm is (or to let go when holding something).
 4. Look at a big button and keep looking (it fills up): PICK UP / LET GO, DROP-OFF, HOME, STOP, FIX MY AIM.
 Looking away or closing the eyes never moves anything. Every session is logged (eyereach/session_log.py).
 
 Full screen by default (--windowed for a 1280 x 720 window).
+Movement follows the pointer immediately; --movement dwell restores destination dwell.
 Helper keys: Esc close, C calibrate again, Space pause (the arm holds still), V show/hide the camera view.
 """
 
@@ -31,8 +32,8 @@ from eyereach.gaze_webcam import Camera, GazeMap, IrisGaze, OneEuro, camera_view
 
 W, H = 1280, 720                                # the picture size; set_size() changes it to the screen's
 WINDOW = "EyeReach"
-PLAY_PART = (0.04, 0.17, 0.68, 0.95)            # the table map, as parts of the picture: left top right bottom
-BUTTONS_PART = (0.73, 0.17, 0.97, 0.95)         # the column of buttons
+PLAY_PART = (0.32, 0.20, 0.73, 0.91)            # the table map, as parts of the picture: left top right bottom
+BUTTONS_PART = (0.77, 0.20, 0.98, 0.91)         # the column of buttons
 PLAY = (51, 122, 870, 684)                      # the table map in pixels (set by set_size)
 COLUMNS, ROWS = (0.06, 0.35, 0.65, 0.94), (0.10, 0.50, 0.90)
 DOT_SECONDS = 2.5                               # seconds of looking at each calibration dot
@@ -142,11 +143,12 @@ def text(canvas, s, x, y, size=0.6, color=DIM, thick=1):
                 cv2.LINE_AA)
 
 
-def centered(canvas, s, cx, y, size=0.6, color=DIM, thick=1):
+def centered(canvas, s, cx, y, size=0.6, color=DIM, thick=1, max_width=None):
     """Text centred on cx, made smaller if it would be wider than the screen."""
     width = cv2.getTextSize(s, cv2.FONT_HERSHEY_SIMPLEX, scale(size), thickness(thick))[0][0]
-    if width > 0.94 * W:
-        size *= 0.94 * W / width
+    limit = 0.94 * W if max_width is None else max_width
+    if width > limit:
+        size *= limit / width
         width = cv2.getTextSize(s, cv2.FONT_HERSHEY_SIMPLEX, scale(size), thickness(thick))[0][0]
     text(canvas, s, cx - width / 2, y, size, color, thick)
 
@@ -162,9 +164,8 @@ def blank():
 
 def face_panel(frame, gaze, ok, size):
     """The mirrored face with its key points and the ray, and where the nose is on it (or None)."""
-    ray = gaze.ray() if gaze.pts is not None else None
-    view = camera_view(frame, gaze.pts, size, ok, ray, gaze.size)
-    nose = None if ray is None else in_view(ray[0], gaze.size, size)
+    view = camera_view(frame, gaze.pts, size, ok, None, gaze.size)
+    nose = None if gaze.pts is None else in_view(gaze.pts[1], gaze.size, size)
     return view, nose
 
 
@@ -176,18 +177,12 @@ def draw_ray(canvas, start, end, now):
         return
     unit = (end - start) / length
     cv2.line(canvas, tuple(start.astype(int)), tuple(end.astype(int)), (120, 100, 60), 1, cv2.LINE_AA)
-    spacing, dash = scale(34), scale(14)
-    offset = (now * scale(160)) % spacing
-    d = offset
-    while d < length:
-        a, b = start + unit * d, start + unit * min(d + dash, length)
-        cv2.line(canvas, tuple(a.astype(int)), tuple(b.astype(int)), RAY_COLOR, max(2, int(scale(3))), cv2.LINE_AA)
-        d += spacing
+    cv2.arrowedLine(canvas, tuple(start.astype(int)), tuple(end.astype(int)),
+                    RAY_COLOR, thickness(2), cv2.LINE_AA, tipLength=min(0.08, 16 / length))
 
 
 def draw(ctl, point, tracking, paused, fps, face=None):
-    """The control screen. face: (picture, nose position on it) from face_panel, shown in the map's
-    top left corner with a ray from the nose to the pointer."""
+    """The control screen, with a dedicated face panel and a calibrated aim line."""
     canvas = blank()
     if paused:
         centered(canvas, "Paused by the helper.", W // 2, 0.09 * H, 1.1, GOLD, 2)
@@ -231,13 +226,16 @@ def draw(ctl, point, tracking, paused, fps, face=None):
         if on:                                             # fills from the left while looked at
             cv2.rectangle(canvas, (bl, bt), (bl + int((br - bl) * ctl.progress), bb), (40, 110, 140), -1)
         cv2.rectangle(canvas, (bl, bt), (br, bb), color, 3 if on else 2)
-        centered(canvas, label, (bl + br) // 2, (bt + bb) // 2 + scale(14), 1.2, color, 2)
+        centered(canvas, label, (bl + br) // 2, (bt + bb) // 2 + scale(14), 1.2, color, 2, max_width=0.88 * (br - bl))
 
     # the face, and the ray out of the nose to where it points
     if face is not None:
         view, nose = face
-        corner = (PLAY[0] + 4, PLAY[1] + 4)
+        corner = (int(0.025 * W), int(0.25 * H))
         paste(canvas, view, *corner)
+        centered(canvas, "YOU", corner[0] + view.shape[1] // 2, corner[1] - scale(18), 0.8, WHITE, 2)
+        centered(canvas, "Point to move", corner[0] + view.shape[1] // 2,
+                 corner[1] + view.shape[0] + scale(35), 0.65, GOLD, 2)
         if nose is not None and point is not None and not paused:
             draw_ray(canvas, (corner[0] + nose[0], corner[1] + nose[1]), point, time.monotonic())
 
@@ -245,7 +243,7 @@ def draw(ctl, point, tracking, paused, fps, face=None):
     if point is not None and not paused:
         p = (int(point[0]), int(point[1]))
         cv2.circle(canvas, p, int(scale(9)), GOLD, -1, cv2.LINE_AA)
-        if ctl.looking is not None and ctl.looking[0] == "map":
+        if ctl.movement == "dwell" and ctl.looking is not None and ctl.looking[0] == "map":
             cv2.ellipse(canvas, p, (ring, ring), 0, -90, -90 + 360 * ctl.progress, GREEN, 3, cv2.LINE_AA)
     return canvas
 
@@ -273,7 +271,10 @@ class Voice:
 def look(camera, gaze):
     """One camera frame and its eye features (None: no face or a blink)."""
     frame = camera.read()
-    return frame, (None if frame is None else gaze.features(frame))
+    if frame is None:
+        gaze.pts, gaze.opening, gaze.pose = None, None, None
+        return None, None
+    return frame, gaze.features(frame)
 
 
 def wait(seconds):
@@ -414,10 +415,10 @@ def calibrate(camera, gaze, shown, voice=None, seconds=DOT_SECONDS, again=False,
             return None
     canvas = blank()
     centered(canvas, "All set!", W // 2, 0.42 * H, 1.8, GREEN, 3)
-    centered(canvas, "Point at a spot on the table map and hold still: the arm goes there.", W // 2,
+    centered(canvas, "Point at the table map to move. Blink twice to pick up or let go.", W // 2,
              0.54 * H, 0.9, WHITE, 2)
     shown(canvas)
-    voice.say("All set. Point at a spot on the table, and hold still. The arm will go there.")
+    voice.say("All set. Point at the table map to move. Blink twice to pick up or let go.")
     return None if wait(3.0) else (gmap, error)
 
 
@@ -431,8 +432,10 @@ def main():
     parser.add_argument("--pointer", choices=("head", "eyes", "both"), default="head",
                         help="head: point with your face (steady; default). eyes: eyes only, for people who "
                              "can't move their head. both: the face for the rough spot, the eyes to fine-tune")
-    parser.add_argument("--dwell", type=float, default=eye_control.LOOK,
+    parser.add_argument("--dwell", type=float, default=0.65,
                         help=f"seconds of looking that press a button or choose a spot (default {eye_control.LOOK})")
+    parser.add_argument("--movement", choices=("follow", "dwell"), default="follow",
+                        help="follow the pointer in real time (default), or dwell to choose destinations")
     parser.add_argument("--dot-seconds", type=float, default=DOT_SECONDS,
                         help=f"seconds of looking at each calibration dot (default {DOT_SECONDS})")
     parser.add_argument("--quiet", action="store_true", help="no voice")
@@ -454,7 +457,7 @@ def main():
     camera, gaze, voice = Camera(args.camera), IrisGaze(args.pointer), Voice(on=not args.quiet)
     cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL | cv2.WINDOW_FREERATIO)
     cv2.resizeWindow(WINDOW, W, H)
-    if size:
+    if not args.windowed:
         # Some desktops (Remote Desktop among them) ignore the full screen request alone, so the
         # window is also put at the top left and sized to the screen once it is showing.
         for _ in range(5):
@@ -485,20 +488,25 @@ def main():
         if not args.real:
             robot.held = True        # the pretend arm: every pick-up holds something
         dropoff = eye_control.DROPOFF if args.dropoff is None else eye_control.arm_link.point_to_area(*args.dropoff)
-        ctl = eye_control.GuidedControl(robot, look=args.dwell, dropoff=dropoff, grab_mm=args.grab_mm)
+        ctl = eye_control.GuidedControl(robot, look=args.dwell, dropoff=dropoff, grab_mm=args.grab_mm, movement=args.movement)
         blinks = eye_control.DoubleBlink()
-        smooth, paused, last, lost_since = OneEuro(), False, time.monotonic(), None
-        view_on, view_size = True, (int(0.2 * W), int(0.15 * W))
+        smooth, paused, last, lost_since = OneEuro(still_hz=1.2, speed_up=0.004), False, time.monotonic(), None
+        view_on = True
+        face_width = int(min(0.27 * W, 0.55 * H * 4 / 3))
+        view_size = (face_width, int(face_width * 3 / 4))
         if args.reuse:
             voice.say(ctl.instruction())
         while True:
             frame, f = look(camera, gaze)
             raw = None if f is None else on_screen(tuple(gmap.predict(f)[0]))
             point = smooth(raw) if raw is not None else None
-            tracking = raw is not None
+            eyes_open = (gaze.opening is not None and gaze.opening >=
+                         max(0.10, 0.55 * (blinks.usual or gaze.opening)))
+            tracking = raw is not None and eyes_open
             now = time.monotonic()
             double = blinks.update(gaze.opening, now) and not paused
-            ctl.step(None if paused or not tracking else looking_at(ctl, point), now, double)
+            ctl.step(None if paused or not tracking else looking_at(ctl, point), now, double,
+                     suspended=paused or not tracking)
             for name, details in ctl.events:
                 log.event(name, **details)
             ctl.events = []
@@ -521,13 +529,15 @@ def main():
             elif key in (ord("v"), ord("V")):
                 view_on = not view_on
             if key in (ord("c"), ord("C")) or ctl.wants_calibration:
+                ctl.step(None, suspended=True)
+                blinks = eye_control.DoubleBlink()
                 ctl.wants_calibration = False
                 done = calibrate(camera, gaze, show, voice, args.dot_seconds, again=True, log=log)
                 if done is None:
                     break
                 gmap = done[0]
                 gmap.save(saved)
-                smooth = OneEuro()
+                smooth = OneEuro(still_hz=1.2, speed_up=0.004)
     except KeyboardInterrupt:
         pass
     finally:

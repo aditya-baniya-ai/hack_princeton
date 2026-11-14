@@ -63,8 +63,8 @@ you were looking (calibration error 4.5-7% of the screen width, up to 200 px at 
 gives 3D key points; the eye corners, nose tip, forehead and chin give the face's direction, drawn as a ray
 out of the nose. Your face is shown live with its key points, and an animated ray runs from your nose on that
 picture to the spot you are pointing at, so you always see where you point. A One Euro filter keeps the
-pointer still while you hold still and still follows a deliberate move (15 px of jitter becomes about 5 px; a
-move is followed within 0.15 s). Blinking doesn't move a head pointer, which also helps the double blink.
+pointer steadier while you hold still and follows deliberate moves with less smoothing. Actual latency
+and accuracy still need measuring with the camera and arm together. Blinking doesn't move a head pointer, which also helps the double blink.
 `--pointer eyes` keeps the eyes-only pointer for people who can't move their head, and `--pointer both`
 uses the head for the rough spot and the eyes to fine-tune. Not yet measured on people.
 
@@ -74,15 +74,20 @@ uses the head for the rough spot and the eyes to fine-tune. Not yet measured on 
 - **Calibrate (about 40 s):** the screen says hello and starts by itself once the face has been steady in view
   for 3 seconds. A yellow dot glides around 12 spots; point your nose at it (with `--pointer eyes`, follow it
   with the eyes). Your face and its ray are shown under the dot. The dot waits while the face is lost. If it comes out poor (over 7% of the screen width) it tries once more.
-- **Move:** point at a spot on the table map and hold still for 1.5 s (a ring fills). The arm slowly goes there
-  (60 mm/s, 40 mm/s while carrying). A glance never moves it, and it does not follow the pointer around.
+- **Move in real time:** point at the table map and the arm follows immediately, with no movement dwell.
+  A larger mirrored face panel stays to the left of the map, and one aim line connects the nose to the
+  calibrated pointer. The arm keeps its limits of 60 mm/s (40 mm/s while carrying); the pointer uses
+  responsive adaptive smoothing. Looking at the face panel or buttons stops live following.
+  Closing the eyes, losing tracking, or pausing stops new movement commands. An in-progress pickup/release
+  finishes its existing sequence. STOP stays stopped until you look at MOVE AGAIN.
+  Use `--movement dwell` for the previous destination-based mode.
 - **Pick up / let go:** blink twice quickly (both blinks within a second). It picks up where the arm is, or lets
   go when it is holding something. Measured against the person's usual eye opening; one blink, slow blinks or
   resting the eyes never count.
 - **Buttons** (look and keep looking until they fill): **PICK UP** / **LET GO** (the same as blinking twice, for
   people who can't blink reliably), **DROP-OFF** (carry it to the tray and let go; the pink square, set with
   `--dropoff X Y` in mm from the arm base), **HOME** (back to the middle), **STOP** (while moving), and
-  **FIX MY AIM** (calibrate again). Greyed-out buttons do nothing.
+  **FIX MY AIM** (calibrate again). Buttons need a 0.65 s dwell by default (`--dwell` changes it). Greyed-out buttons do nothing.
 - **Losing the eyes** (looking away, closing them, the face out of view) never starts anything.
 - **Helper keys:** Esc closes, C calibrates again, Space pauses, V hides/shows the face picture. Options:
   `--pointer head|eyes|both`, `--dwell 2`,
