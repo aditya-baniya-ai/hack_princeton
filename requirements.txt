@@ -2,3 +2,5 @@ numpy
 opencv-python
 mediapipe>=0.10,<0.11
 boto3
+deepagents>=0.7
+langchain-aws>=1.0

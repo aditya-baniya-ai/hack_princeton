@@ -120,6 +120,7 @@ eyereach/      the control: gaze_webcam.py (face direction, iris gaze, calibrati
                eye_control.py (pointer following, dwell, double blink, pick up, let go), run_webcam.py (the screen app),
                session_log.py (the session log and its summary)
                vision_nova.py (Amazon Nova: names the objects on the table and gives each a box)
+agent/         task_agent.py: the deepagents task agent ("bring me the pills": plan, confirm, pick, drop, tell)
 brain/         arm.py: the robot maths, plus commands to check it (test, where, go, home)
                arm_link.py: the arm follows a point, grabs and releases (or a pretend arm)
 gestures/      gestures.py: the ROS 2 link that moves the joints
@@ -157,6 +158,21 @@ python3 -m eyereach.vision_nova table.jpg "the pills"    # also says which objec
 
 If Nova cannot be reached it logs a warning and returns no objects; the app keeps running. The tests use saved answers
 in `tests/fixtures/`, so they need no network.
+
+### The task agent (LangChain deepagents)
+
+`agent/task_agent.py` takes a task like "bring me the pills" and plans it: a perception sub-agent finds the object,
+the person confirms it with their eyes, the arm picks and drops it, and a caregiver sub-agent sends a message. It keeps
+a notes file (`~/.eyereach/agent/notes.md`, e.g. "medicine: the pill bottle, next to the cup") and reads it on later
+tasks. Nothing moves until the person confirms that exact object: `pick` refuses otherwise, whatever the model says.
+
+The tools are pretend for now (no arm, camera or Photon needed). The model is Amazon Nova 2 Lite on Bedrock, with the
+same AWS keys as above; `AGENT_MODEL_ID` changes it and `EYEREACH_NOTES` moves the notes folder.
+
+```bash
+python3 -m agent.task_agent "bring me the pills"                     # pretend table; answer y or n when asked
+python3 -m agent.task_agent "bring me the snack" --photo table.jpg   # objects found by Nova in a photo
+```
 
 ## Hardware
 
