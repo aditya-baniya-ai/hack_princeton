@@ -290,12 +290,18 @@ Always start with the pretend arm, then the simulated arm, then the real one.
 launch/eyereach.sh --no-arm      # pretend arm, no ROS
 launch/eyereach.sh --sim         # simulated arm in RViz
 launch/eyereach.sh               # the real arm
+launch/eyereach.sh --calibrate   # the real arm, with a new calibration
 ```
+
+The launcher has its settings at the top of `launch/eyereach.sh`: it **reuses the saved calibration** (only the
+first run, or a new screen size or pointer mode, calibrates; FIX MY AIM or C recalibrates any time), and the
+fingertips **travel 100 mm** above the table and **go down to 40 mm** to pick up. Change `TRAVEL_MM`, `GRAB_MM` or
+`REUSE` there, or override one run with `--travel-mm 120`, `--grab-mm 50` or `--calibrate`.
 
 For the real arm: turn on the 12 V power, make sure the OpenCR's USB is in the Jetson, **hold the arm** (it goes limp
 when it starts and stops), keep the power switch within reach, then run it. If it stays on "Waiting for the arm",
 look in `/tmp/robo_arm.log`. Esc in the app stops the arm too. Other options go to the app (`--camera /dev/video0`,
-`--reuse`, `--windowed` (full screen is the default), `--dot-seconds 4`, `--dwell 1.2`).
+`--movement dwell`, `--windowed` (full screen is the default), `--dot-seconds 4`, `--dwell 1.2`).
 
 **Start the arm by hand** (for other programs): `ros2 launch open_manipulator_x_bringup hardware.launch.py port_name:=/dev/ttyACM0`,
 and wait for `Configured and activated arm_controller`. **Watch the real arm in RViz:** add `start_rviz:=true`.

@@ -5,22 +5,35 @@
 #   launch/eyereach.sh --sim        simulated arm in RViz
 #   launch/eyereach.sh --no-arm     pretend arm, no ROS (works on any computer)
 #
-# Other options go to the app, e.g. --camera /dev/video0, --reuse, --windowed.
-# The arm runs in the background (log: /tmp/robo_arm.log). Esc in the app (or Ctrl+C here) stops
-# everything. On the real arm, hold it first: it goes limp when it starts and stops.
+#   launch/eyereach.sh --calibrate  do a new calibration instead of reusing the saved one
+#
+# Other options go to the app, e.g. --camera /dev/video0, --windowed, --travel-mm 120 (they override
+# the settings below). The arm runs in the background (log: /tmp/robo_arm.log). Esc in the app (or
+# Ctrl+C here) stops everything. On the real arm, hold it first: it goes limp when it starts and stops.
+
+# ---- settings: change them here ----
+TRAVEL_MM=100   # fingertips this high above the table (mm) at start-up and while moving
+GRAB_MM=40      # fingertips this high above the table (mm) when picking up (the app never goes below 30)
+REUSE=true      # reuse the saved calibration (the first run, or a new screen size, still calibrates);
+                # recalibrate any time with FIX MY AIM or C in the app, or start with --calibrate
+# -------------------------------------
+
 set -m   # the arm runs in its own process group, so it can be stopped cleanly
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(dirname "$HERE")"
 SIM=false
 NO_ARM=false
-APP_ARGS=()
+APP_ARGS=(--travel-mm "$TRAVEL_MM" --grab-mm "$GRAB_MM")   # given first, so options typed after win
 for arg in "$@"; do
   case "$arg" in
     --sim) SIM=true ;;
     --no-arm) NO_ARM=true ;;
+    --calibrate) REUSE=false ;;
+    --reuse) REUSE=true ;;
     *) APP_ARGS+=("$arg") ;;
   esac
 done
+[ "$REUSE" = true ] && APP_ARGS+=(--reuse)
 
 # MediaPipe lives in its own environment on the Jetson (see the README), if it's set up
 PYTHON=python3
