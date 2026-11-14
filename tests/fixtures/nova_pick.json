@@ -1,0 +1,5 @@
+{
+  "output": {"message": {"role": "assistant", "content": [{"text": "{\"name\": \"pill bottle\", \"box\": [520, 455, 610, 690], \"reason\": \"the small orange bottle is the pills\"}"}]}},
+  "stopReason": "end_turn",
+  "usage": {"inputTokens": 1371, "outputTokens": 38, "totalTokens": 1409}
+}

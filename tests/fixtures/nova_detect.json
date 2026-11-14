@@ -1,0 +1,5 @@
+{
+  "output": {"message": {"role": "assistant", "content": [{"text": "```json\n[{\"name\": \"cup\", \"box\": [120, 400, 310, 720]}, {\"name\": \"pill bottle\", \"box\": [520, 455, 610, 690]}, {\"name\": \"phone\", \"box\": [700, 610, 950, 1000]}]\n```"}]}},
+  "stopReason": "end_turn",
+  "usage": {"inputTokens": 1352, "outputTokens": 74, "totalTokens": 1426}
+}
