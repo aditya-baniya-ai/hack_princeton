@@ -94,27 +94,21 @@ class PickupSequenceTest(unittest.TestCase):
         self.assertAlmostEqual(height(robot.plan[0][1]), eye_control.HOVER_MM, places=4)  # 4. lifts
         self.assertTrue(robot.closed)                                # ... and stays closed
 
-    def test_closing_on_nothing_opens_again_and_holding_stays_closed(self):
-        robot = Mock()
-        robot.closed = True
-        robot.holding.return_value = False                # fingers closed all the way: nothing there
-        robot.busy.return_value = False
-        ctl = GuidedControl(robot, movement="follow")
-        ctl.phase = "picking"
-        ctl.step(None, now=1)
-        self.assertFalse(ctl.holding)
-        robot.open_here.assert_called_once()
-        robot = Mock()
-        robot.closed = True
-        robot.holding.return_value = True                 # stopped partway: holding something
-        robot.busy.return_value = False
-        ctl = GuidedControl(robot, movement="follow")
-        ctl.phase = "picking"
-        ctl.step(None, now=1)
-        self.assertTrue(ctl.holding)
-        robot.open_here.assert_not_called()
-        ctl.blink(2)
-        robot.release_here.assert_called_once()
+    def test_stays_closed_even_when_the_finger_check_says_nothing(self):
+        for detected in (False, True):
+            robot = Mock()
+            robot.closed = True
+            robot.holding.return_value = detected
+            robot.busy.return_value = False
+            robot.gripper_position.return_value = -0.008
+            ctl = GuidedControl(robot, movement="follow")
+            ctl.phase = "picking"
+            ctl.step(None, now=1)
+            self.assertTrue(ctl.holding)
+            robot.open_here.assert_not_called()
+            self.assertEqual(ctl.events[-1][1]["gripper"], -0.008)
+            ctl.blink(2)
+            robot.release_here.assert_called_once()
 
 
 class HandButtonLatchTest(unittest.TestCase):

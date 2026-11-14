@@ -181,12 +181,18 @@ class FreePlacementTest(unittest.TestCase):
         self.assertFalse(ctl.holding or robot.closed)
         self.assertLess(math.dist(before, robot.gripper_area()), 1.0)
 
-    def test_an_empty_grab_opens_again(self):
-        robot, ctl = guided()                          # nothing under the gripper
+    def test_stays_closed_after_a_pick_up_until_the_next_double_blink(self):
+        robot, ctl = guided()                          # the finger check says "nothing held"
         ctl.step(None, double_blink=True)
+        self.assertEqual(keep_looking(ctl, None, "there", seconds=10), "there")
+        for _ in range(50):                            # a while later, no blink: still closed
+            ctl.step(None)
+            time.sleep(0.02)
+        self.assertTrue(ctl.holding and robot.closed)
+        self.assertEqual(ctl.buttons()[0][0], "let go")
+        ctl.step(None, double_blink=True)              # the next double blink opens it
         self.assertEqual(keep_looking(ctl, None, "waiting", seconds=10), "waiting")
         self.assertFalse(ctl.holding or robot.closed)
-        self.assertEqual(ctl.buttons()[0][0], "pick up")
 
     def test_no_fixed_home_or_dropoff_controls(self):
         robot, ctl = guided()

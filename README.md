@@ -86,10 +86,11 @@ uses the head for the rough spot and the eyes to fine-tune. Not yet measured on 
   opens the gripper and waits one second, lowers to 50 mm (5 cm) with it open, closes it fully, waits one
   second for closure, then lifts back to
   its travel height. **The gripper is open the rest of the time:** at start-up it opens first (and waits until it
-  reports open) before the arm moves, and when the app closes it opens and waits again before the arm stops; if the fingers closed all the way (nothing
-  there), it opens again at once and says so; only when it stops partway on an object does it stay closed,
-  until the next double blink or LET GO opens it where it is. Very thin objects (under about 8 mm) close all
-  the way too, so they count as nothing. A double blink only counts while the head is holding still (turning
+  reports open) before the arm moves, and when the app closes it opens and waits again before the arm stops.
+  It only closes when you pick up, and then **stays closed, holding what it grabbed, until your next double
+  blink** (or LET GO), which opens it where it is and drops the item. (The fingers' position is too unreliable
+  to tell whether something was caught, so it is only written to the session log.) A double blink only counts
+  while the head is holding still (turning
   or nodding changes how open the eyes look) and not in the first 3 s after the face appears.
 - **Buttons:** PICK UP / LET GO, STOP / MOVE AGAIN, and FIX MY AIM. No fixed HOME or DROP-OFF
   buttons or map boxes. Buttons support gaze dwell (0.65 s by default, set with `--dwell`) and mouse clicks.

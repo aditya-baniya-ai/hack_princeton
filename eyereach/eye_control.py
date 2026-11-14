@@ -311,18 +311,17 @@ class GuidedControl:
                 else:
                     self.say.append("Arrived." if arrived else "That is as far as the arm can reach.")
         elif self.phase == "picking" and not r.busy():
-            # The gripper stays open unless it is really holding something: closing on nothing
-            # (the fingers close all the way) opens it again at once. Very thin objects (under
-            # about 8 mm) also close all the way, so they count as nothing.
+            # After a pick-up the gripper stays closed, holding what it grabbed, until the next double
+            # blink (or LET GO) opens it. The finger-position guess at whether something is held
+            # is only logged: on the real arm it said "nothing" even when it had the object.
             detected = r.holding()
-            if not detected:
-                r.open_here()
-            self.holding = detected
+            position = getattr(r, "gripper_position", lambda: None)()
+            self.holding = r.closed
             r.carrying(self.holding)
             self.phase = "there" if self.holding else "waiting"
-            self.events.append(("picked", {"holding": detected, "closed": r.closed}))
-            self.say.append("Got it. Move to where you want to let go." if detected else
-                            "Nothing there, so the gripper opened again.")
+            self.events.append(("picked", {"holding": detected, "closed": r.closed,
+                                           "gripper": round(position, 4) if isinstance(position, (int, float)) else None}))
+            self.say.append("Holding. Move to where you want to drop it, then blink twice.")
         elif self.phase == "letting go" and not r.busy():
             self.holding = False
             r.carrying(False)
