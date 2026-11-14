@@ -220,6 +220,7 @@ launch/        eyereach.sh (one command: the arm and the app), talk.sh (Nova Son
                fix_turns.py (joint and gripper turn checks before each start)
 firmware/      servo_check: an Arduino test that stands the arm up and waves
 tools/         measure.py: gaze accuracy on 9 test dots, and timed grab trials, into results/measurements.csv
+services/      photon/caregiver.py: the caregiver's two-way iMessage agent (Photon 2.0 beta)
 tests/         run with: python3 -m unittest discover -s tests
 dependencies.repos   the ROBOTIS code to download (setup step 5)
 ```
@@ -281,6 +282,34 @@ worst error in pixels, % of the screen width and degrees. `--screen-cm` is the w
 `--distance-cm` is eyes to screen: measure both on each setup, they are only used for the degrees.
 `trials` is for a helper at the keyboard while the person uses the arm: Enter when they start, then `y` if the grab
 worked or `n` if not. Both add rows to `results/measurements.csv`.
+
+### Caregiver messages on iMessage (Photon)
+
+The robot texts the caregiver what happened, and the caregiver can text back:
+
+| Caregiver texts | Answer |
+|---|---|
+| `STATUS` or `what happened today?` | today's events, from the event log |
+| `STOP` | the arm is paused (`~/.eyereach/STOP`; `eyereach.notify.stopped()` is True) until `RESUME` |
+| `RESUME` | the arm can move again |
+| any other question | Amazon Nova answers from today's event log |
+
+`STOP` and `RESUME` are plain code, never the AI. Every event and message is kept in `~/.eyereach/events.jsonl`.
+In the app, `from eyereach.notify import notify; notify("picked", "Picked up the cup.")` sends a message; it returns at
+once and never blocks or crashes the arm loop, even when the service is off.
+
+Setup (once):
+1. Join the Photon beta (photon.codes/beta), create a project, and make an API key with `project:read` and `project:write`.
+2. In the project's **iMessage** page, add the caregiver's iMessage number, then **assign a number from the shared pool**:
+   that is the agent's number.
+3. Set `PHOTON_API_KEY`, `PHOTON_PROJECT_ID`, `PHOTON_AGENT_HANDLE` (the agent's number, e.g. `+16095550123`) and
+   `PHOTON_CAREGIVER` (the caregiver's number) in the environment, not in the repo. The AWS keys above let Nova answer
+   free questions.
+4. Run `python3 -m services.photon.caregiver` (Python 3.11+; on the Jetson use `~/eyereach_agent_venv`).
+5. **The caregiver texts the agent's number once (e.g. "hi")**: Photon's shared line can't start a conversation, so
+   messages from the robot only arrive after that.
+
+Check: `python3 -c "from eyereach.notify import notify; notify('test', 'hello')"` makes the phone get "hello".
 
 ## Hardware
 

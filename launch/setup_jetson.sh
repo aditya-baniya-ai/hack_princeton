@@ -140,7 +140,8 @@ if [ "$AGENT" = true ]; then
   command -v uv > /dev/null || python3 -m pip install --user uv
   [ -x "$AGENT_VENV/bin/python" ] || uv venv --python 3.12 "$AGENT_VENV"
   uv pip install --python "$AGENT_VENV/bin/python" "deepagents>=0.7" "langchain-aws>=1.0" boto3 numpy opencv-python-headless \
-    "aws_sdk_bedrock_runtime>=0.1.0,<0.2.0" smithy-aws-core sounddevice   # Nova Sonic voice (launch/talk.sh)
+    "aws_sdk_bedrock_runtime>=0.1.0,<0.2.0" smithy-aws-core sounddevice \
+    photonhq-api   # Nova Sonic voice (launch/talk.sh); Photon caregiver messages (services/photon/)
   "$AGENT_VENV/bin/python" -c "import sys, deepagents; print('    deepagents ok on Python', sys.version.split()[0])"
 fi
 
