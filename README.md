@@ -113,6 +113,26 @@ uses the head for the rough spot and the eyes to fine-tune. Not yet measured on 
   error in degrees `--screen-cm` (width of the picture on the screen) and `--distance-cm` (eyes to screen).
   `python3 -m eyereach.session_log` sums up all sessions per person.
 
+## Talk to it (Amazon Nova 2 Sonic)
+
+`launch/talk.sh` is a spoken conversation with EyeReach through Amazon Nova 2 Sonic (speech-to-speech on Bedrock,
+model `amazon.nova-2-sonic-v1:0`, `us-east-1`): speak into the microphone (the C920 webcam has one) and it answers
+through the speaker. It uses the same AWS keys from `.env` as Nova vision; Polly and Transcribe are not needed (the
+current key is Bedrock-only and can't use them anyway).
+
+```bash
+launch/talk.sh                        # talk; Ctrl+C ends
+launch/talk.sh --text "Hello"         # one typed sentence, reply saved to /tmp/eyereach_sonic_reply.wav (no mic/speaker)
+launch/talk.sh --list                 # audio devices; pick with --microphone N / --speaker N
+```
+
+- It only talks: it never moves the arm. STOP stays offline (the gaze STOP button, or saying "Stop" to the eye app).
+- It stops listening while it speaks, so it can't hear itself through the speaker.
+- Sonic only answers while an audio input is open, so even `--text` sends silence while it waits.
+- It runs in `~/eyereach_agent_venv` (Python 3.12, which the Sonic SDK needs); `launch/setup_jetson.sh` installs it.
+- Sound devices: `pactl set-default-source` / `pactl set-default-sink` choose the system microphone and speaker
+  (`pactl list short sources`, `pactl list short sinks` list them).
+
 ## Folders
 
 ```
