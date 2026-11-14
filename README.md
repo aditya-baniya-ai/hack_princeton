@@ -120,9 +120,10 @@ and keep still for about two seconds; that is your centre.
   on-screen buttons still work with a mouse click for a helper, and "Stop" by voice always works.
 - **FIX MY AIM** (or **C**) sets the centre again. The screen shows "Centre: still", "Hold the tilt..." or "Moving
   left", and the ray from your nose points to where the arm is heading.
-- **Left is left on the screen:** your face is shown as a mirror, cut so it is always in the middle of its picture
-  (black past the camera's edges), with LEFT, RIGHT, AWAY (top) and TOWARD YOU (bottom) on its sides; the one you are
-  moving toward lights up. The map is turned the same way in this mode: away from you at the top, near you at the
+- **Left is left on the screen:** your face is shown big, **in the middle of the window**, as a mirror, cut so it is
+  always in the middle of its picture (black past the camera's edges), with LEFT, RIGHT, AWAY (top) and TOWARD YOU
+  (bottom) on its sides; the one you are moving toward lights up and a big arrow from the middle of your face points
+  the way the arm is moving. The map (where the arm is) and the volume are on the left, the buttons on the right. The map is turned the same way in this mode: away from you at the top, near you at the
   bottom, so tilting up moves the arm up on the screen. Checked: your right is the map's right is the arm's move to
   your right (the arm faces you).
 - **Check it with your own head first (no arm):** `~/eyereach_venv/bin/python -m eyereach.head_tilt` prints the angles,

@@ -35,6 +35,8 @@ from eyereach.gaze_webcam import Camera, GazeMap, IrisGaze, OneEuro, camera_view
 W, H = 1280, 720                                # the picture size; set_size() changes it to the screen's
 WINDOW = "EyeReach"
 PLAY_PART = (0.32, 0.20, 0.73, 0.91)            # the table map, as parts of the picture: left top right bottom
+TILT_PLAY_PART = (0.03, 0.24, 0.29, 0.62)       # tilt control: a smaller map on the left; the face is in the middle
+MAP = {"away_up": False}       # tilt control: face in the middle, "away from you" at the top of the map
 BUTTONS_PART = (0.77, 0.20, 0.98, 0.91)         # the column of buttons
 VOLUME_PART = (0.025, 0.60, 0.30, 0.95)         # the speaker volume, under the face picture (top: volume_area)
 PLAY = (51, 122, 870, 684)                      # the table map in pixels (set by set_size)
@@ -67,7 +69,16 @@ def set_size(width, height):
     """Draw everything at this size (the screen's, in full screen)."""
     global W, H, PLAY
     W, H = int(width), int(height)
-    PLAY = rect(PLAY_PART)
+    PLAY = rect(TILT_PLAY_PART if MAP["away_up"] else PLAY_PART)
+
+
+def face_rect():
+    """Where the face picture goes: (left, top, width, height). Tilt control: big, in the middle of the window."""
+    if MAP["away_up"]:
+        fw = int(min(0.40 * W, 0.6 * H * 4 / 3))
+        return (W - fw) // 2, int(0.22 * H), fw, int(fw * 3 / 4)
+    fw = int(min(0.27 * W, 0.55 * H * 4 / 3))
+    return int(0.025 * W), int(0.25 * H), fw, int(fw * 3 / 4)
 
 
 set_size(W, H)
@@ -109,7 +120,6 @@ def on_screen(point, slack=0.15):
     return min(max(x, 0.0), W - 1.0), min(max(y, 0.0), H - 1.0)
 
 
-MAP = {"away_up": False}       # tilt control: "away from you" at the top of the map, like tilting the head up
 
 
 def to_area(point):
@@ -131,8 +141,11 @@ def to_screen(u, v):
 def volume_area():
     """The volume control's area: under the face picture and its label (whose size depends on the screen)."""
     left, _, right, bottom = rect(VOLUME_PART)
-    face_height = int(min(0.27 * W, 0.55 * H * 4 / 3) * 3 / 4)
-    top = int(0.25 * H) + face_height + int(0.075 * H)
+    if MAP["away_up"]:                             # tilt control: under the map, on the left
+        left, right, top = PLAY[0], PLAY[2], PLAY[3] + int(0.07 * H)
+    else:
+        _, face_top, _, face_height = face_rect()
+        top = face_top + face_height + int(0.075 * H)
     return left, min(top, bottom - int(0.2 * H)), right, bottom
 
 
@@ -269,7 +282,7 @@ def draw(ctl, point, tracking, paused, fps, face=None):
     # the table map
     left, top, right, bottom = PLAY
     cv2.rectangle(canvas, (left, top), (right, bottom), (150, 110, 130), 2)
-    near, far = ("near you", "away from you (near the arm)")
+    near, far = ("near you", "away from you")
     centered(canvas, far if MAP["away_up"] else near, (left + right) // 2, top - 0.012 * H, 0.55)
     centered(canvas, near if MAP["away_up"] else "near the arm", (left + right) // 2, bottom + 0.035 * H, 0.55)
     ring = int(scale(26))
@@ -318,11 +331,18 @@ def draw(ctl, point, tracking, paused, fps, face=None):
     # the face, and the ray out of the nose to where it points
     if face is not None:
         view, nose = face
-        corner = (int(0.025 * W), int(0.25 * H))
+        corner = face_rect()[:2]
         paste(canvas, view, *corner)
         centered(canvas, "YOU", corner[0] + view.shape[1] // 2, corner[1] - scale(18), 0.8, WHITE, 2)
         centered(canvas, "Say Robot move left" if ctl.control_mode == "voice" else tilt_status(ctl), corner[0] + view.shape[1] // 2,
                  corner[1] + view.shape[0] + scale(35), 0.65, GOLD, 2)
+        direction = getattr(ctl, "tilt_dir", None)
+        if getattr(ctl, "tilt", False) and direction is not None and not paused:
+            vw, vh = view.shape[1], view.shape[0]      # a big arrow from the middle of the face, the way it moves
+            mid = (corner[0] + vw // 2, corner[1] + vh // 2)
+            tip = (int(mid[0] + direction[0] * 0.27 * vw), int(mid[1] - direction[1] * 0.27 * vh))
+            cv2.arrowedLine(canvas, mid, tip, (30, 24, 24), int(scale(14)), cv2.LINE_AA, tipLength=0.3)
+            cv2.arrowedLine(canvas, mid, tip, GOLD, int(scale(8)), cv2.LINE_AA, tipLength=0.3)
         if getattr(ctl, "tilt", False):                # which way is which, lit up while moving that way
             label = getattr(ctl, "tilt_label", "") or ""
             vw, vh = view.shape[1], view.shape[0]
@@ -334,7 +354,7 @@ def draw(ctl, point, tracking, paused, fps, face=None):
                 tw, th = cv2.getTextSize(word, cv2.FONT_HERSHEY_SIMPLEX, scale(size), thickness(thick))[0]
                 cv2.rectangle(canvas, (cx - tw // 2 - 6, cy - th - 6), (cx + tw // 2 + 6, cy + 6), (30, 24, 24), -1)
                 centered(canvas, word, cx, cy, size, GOLD if on else WHITE, thick)
-        if nose is not None and point is not None and not paused:
+        if not getattr(ctl, "tilt", False) and nose is not None and point is not None and not paused:
             draw_ray(canvas, (corner[0] + nose[0], corner[1] + nose[1]), point, time.monotonic())
 
     # where the pointer is, with a ring that fills while it rests on the map
@@ -688,7 +708,8 @@ def main():
         head = None
         if args.control == "tilt":                     # no screen pointer: the head's tilt moves the arm
             ctl.movement, ctl.tilt = "follow", True
-            MAP["away_up"] = True                      # tilt up = away = up on the map, like the face picture
+            MAP["away_up"] = True                      # face in the middle; tilt up = away = up on the map
+            set_size(W, H)
             centre = find_centre(camera, gaze, show, voice)
             if centre is None:
                 return
@@ -714,8 +735,7 @@ def main():
         blinks, last_pose = eye_control.DoubleBlink(), None
         smooth, paused, last, lost_since = OneEuro(still_hz=1.2, speed_up=0.004), False, time.monotonic(), None
         view_on = True
-        face_width = int(min(0.27 * W, 0.55 * H * 4 / 3))
-        view_size = (face_width, int(face_width * 3 / 4))
+        view_size = face_rect()[2:]
         if args.reuse:
             voice.say(ctl.instruction())
         while True:
@@ -733,6 +753,7 @@ def main():
                         v = min(1.0, max(0.0, v + tilt.direction[1] * TILT_LEAD))
                     point = to_screen(u, v)            # the ray goes from the nose to where the arm heads
                 ctl.tilt_label = tilt.label if tracking else "no face"
+                ctl.tilt_dir = tilt.direction if tracking and ctl.live_enabled else None
             else:
                 raw = None if f is None else on_screen(tuple(gmap.predict(f)[0]))
                 point = smooth(raw) if raw is not None else None
