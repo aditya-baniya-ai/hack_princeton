@@ -1,0 +1,18 @@
+{
+  "output": {
+    "message": {
+      "role": "assistant",
+      "content": [
+        {
+          "text": "```json\n{\n  \"name\": \"snack\",\n  \"box\": [463, 721, 605, 837],\n  \"reason\": \"the small round pastry with white sprinkles on a plate\"\n}\n```"
+        }
+      ]
+    }
+  },
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 386,
+    "outputTokens": 49,
+    "totalTokens": 435
+  }
+}

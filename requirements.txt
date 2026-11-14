@@ -1,3 +1,4 @@
 numpy
 opencv-python
 mediapipe>=0.10,<0.11
+boto3

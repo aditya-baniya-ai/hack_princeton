@@ -112,6 +112,7 @@ uses the head for the rough spot and the eyes to fine-tune. Not yet measured on 
 eyereach/      the control: gaze_webcam.py (face direction, iris gaze, calibration, smoothing),
                eye_control.py (pointer following, dwell, double blink, pick up, let go), run_webcam.py (the screen app),
                session_log.py (the session log and its summary)
+               vision_nova.py (Amazon Nova: names the objects on the table and gives each a box)
 brain/         arm.py: the robot maths, plus commands to check it (test, where, go, home)
                arm_link.py: the arm follows a point, grabs and releases (or a pretend arm)
 gestures/      gestures.py: the ROS 2 link that moves the joints
@@ -130,6 +131,25 @@ pip install -r requirements.txt
 python3 -m unittest discover -s tests
 python3 -m eyereach.run_webcam            # a pretend arm; asks for the camera, then calibrates
 ```
+
+### Amazon Nova (finding the objects)
+
+`eyereach/vision_nova.py` sends one camera image to Amazon Nova 2 Lite on Bedrock and gets back each object's name and
+box. Keys come only from environment variables (never commit them):
+
+| Variable | What |
+|---|---|
+| `AWS_BEARER_TOKEN_BEDROCK` | a Bedrock API key (or set `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` instead) |
+| `AWS_REGION` | default `us-east-1` |
+| `NOVA_MODEL_ID` | default `us.amazon.nova-2-lite-v1:0` |
+
+```bash
+python3 -m eyereach.vision_nova table.jpg                # lists the objects and their boxes
+python3 -m eyereach.vision_nova table.jpg "the pills"    # also says which object is the pills, or that it is not sure
+```
+
+If Nova cannot be reached it logs a warning and returns no objects; the app keeps running. The tests use saved answers
+in `tests/fixtures/`, so they need no network.
 
 ## Hardware
 
