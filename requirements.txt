@@ -1,4 +1,4 @@
 numpy
 opencv-python
-mediapipe>=0.10,<0.11
+mediapipe>=0.10,<0.10.30   # 0.10.30 and later dropped mp.solutions (FaceMesh), which gaze_webcam.py uses
 boto3
