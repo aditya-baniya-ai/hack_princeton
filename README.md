@@ -75,7 +75,7 @@ Design rules for the Amazon parts:
 
 ## What we built
 
-Added during the event, newest last (details in the sections below):
+The main features (details in the sections below):
 - **Head pointing with a visible ray:** the pointer follows where the face points (steadier than the irises alone); the
   live face is shown with its key points and an animated ray from the nose to the spot. `--pointer eyes|both` too.
 - **Calibration that runs itself:** starts when the face is steady, a gliding dot that waits for you, one automatic
