@@ -15,6 +15,7 @@ import re
 import threading
 import time
 
+MIN_CONFIDENCE = 0.70   # every word of a command must reach this (was 0.80: too many real commands dropped)
 MODEL = Path.home() / '.eyereach' / 'models' / 'vosk-model-small-en-us-0.15'
 REPO = Path(__file__).resolve().parent.parent
 # Nova 2 Sonic's SDK needs Python 3.12: it runs as its own program in the agent's environment
@@ -30,6 +31,23 @@ PHRASES = {
 for direction in ('left', 'right', 'toward me', 'away from me'):
     PHRASES[f'robot move {direction}'] = ('jog', direction, 20.0)
     PHRASES[f'robot a little {direction}'] = ('jog', direction, 5.0)
+# The way people actually say it: away/forward = away from me; closer/back = toward me
+for word, direction in (('away', 'away from me'), ('forward', 'away from me'), ('closer', 'toward me'),
+                        ('back', 'toward me')):
+    PHRASES[f'robot move {word}'] = ('jog', direction, 20.0)
+    PHRASES[f'robot a little {word}'] = ('jog', direction, 5.0)
+PHRASES['robot come closer'] = ('jog', 'toward me', 20.0)
+# Short forms without 'robot' (the app only accepts these in voice mode, which is chosen on purpose); switching
+# mode and fixing the aim always need 'robot', so ordinary talk can't change mode.
+for _phrase, _action in list(PHRASES.items()):
+    if _phrase.startswith('robot ') and _action not in ('voice', 'vision', 'aim', 'stop'):
+        PHRASES[_phrase[len('robot '):]] = _action
+
+
+def needs_voice_mode(text):
+    """A short form (no 'robot'), other than Stop: only acted on in voice mode."""
+    words = re.sub(r'[^a-z ]', '', text.lower()).split()
+    return bool(words) and words[0] != 'robot' and words != ['stop']
 
 
 def parse(text):
@@ -55,6 +73,8 @@ class VoiceInput:
         self.done = threading.Event()
         self.thread = None
         self.last_heard = ''
+        self.dropped = queue.Queue(maxsize=16)    # (text, why, lowest word confidence) heard but not acted on
+        self.mute_until = 0.0                     # the app is talking until then: hear silence, not itself
 
     def start(self):
         self.thread = threading.Thread(target=self._run, name='eyereach-speech', daemon=True)
@@ -67,7 +87,9 @@ class VoiceInput:
             self.done.set()
             return
         try:
-            self.audio.put_nowait((time.monotonic(), bytes(data)))
+            now = time.monotonic()
+            # while the app speaks its own prompts, pass silence so it can't take its voice for a command
+            self.audio.put_nowait((now, bytes(len(data)) if now < self.mute_until else bytes(data)))
         except queue.Full:
             self.error = 'Microphone fell behind; restart voice input'
             self.done.set()
@@ -116,15 +138,32 @@ class VoiceInput:
                         stopped = True
                     if final:
                         words = result.get('result', [])
-                        confident = bool(words) and min(w.get('conf', 0) for w in words) >= 0.8
+                        lowest = min((w.get('conf', 0) for w in words), default=0.0)
+                        confident = bool(words) and lowest >= MIN_CONFIDENCE
                         self.last_heard = text
                         if confident and action is not None and action != 'stop' and not stopped:
                             self._emit(VoiceEvent(action, text, started or stamp, stamp))
+                        elif text and text != '[unk]' and not stopped:
+                            # Heard but not acted on: say why, so the person isn't left guessing
+                            why = 'not a command' if action is None else f'not sure ({lowest:.2f}, needs {MIN_CONFIDENCE:.2f})'
+                            try:
+                                self.dropped.put_nowait((text, why, round(lowest, 2)))
+                            except queue.Full:
+                                pass
                         started, stopped = None, False
         except Exception as exc:
             self.error = str(exc)
         finally:
             self.status = 'Unavailable'
+
+    def poll_dropped(self):
+        """Phrases heard since the last call that were not acted on: [(text, why, lowest confidence)]."""
+        items = []
+        while True:
+            try:
+                items.append(self.dropped.get_nowait())
+            except queue.Empty:
+                return items
 
     def poll(self):
         items = []
@@ -209,8 +248,25 @@ class BothInputs:
     status = property(lambda self: self.offline.status)
     error = property(lambda self: self.offline.error)    # only the offline one stops the arm when it fails
 
+    @property
+    def mute_until(self):
+        return self.offline.mute_until
+
+    @mute_until.setter
+    def mute_until(self, until):
+        # the offline microphone hears silence; Sonic (its own program on the microphone) can't be muted from
+        # here, so what it hears while the app talks, and just after, is dropped in poll()
+        self.offline.mute_until = until
+
+    def poll_dropped(self):
+        return self.offline.poll_dropped()
+
     def poll(self):
-        return self.offline.poll() + self.sonic.poll()
+        sonic = self.sonic.poll()
+        until = getattr(self.offline, 'mute_until', 0.0)
+        if isinstance(until, (int, float)) and time.monotonic() < until + 2.0:
+            sonic = []                                    # likely the app's own voice coming back
+        return self.offline.poll() + sonic
 
     def close(self):
         self.sonic.close()
@@ -237,6 +293,8 @@ def main():
         while not listener.error:
             for event in listener.poll():
                 print(f'{event.text} -> {event.action}', flush=True)
+            for text, why, lowest in listener.poll_dropped():
+                print(f'{text} -> ignored: {why}', flush=True)
             time.sleep(0.05)
         raise SystemExit(listener.error)
     except KeyboardInterrupt:

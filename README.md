@@ -3,9 +3,9 @@
 [![tests](https://github.com/aditya-baniya-ai/hack_princeton/actions/workflows/tests.yml/badge.svg)](https://github.com/aditya-baniya-ai/hack_princeton/actions/workflows/tests.yml)
 Every pull request and push to `main` runs all the tests on GitHub (`.github/workflows/tests.yml`).
 
-A robot arm that a person with severe arm paralysis controls with their head and eyes: point at a spot on a
-table map on the screen and the arm follows, blink twice to pick something up, blink twice again to put it down.
-Amazon Nova finds the objects and talks back; a LangChain deepagents task agent plans "bring me the pills".
+A robot arm that a person with severe arm paralysis controls with their head: the arm follows their nose, a nod picks
+something up and another nod puts it down; or by voice. Amazon Nova finds objects and talks back (Nova 2 Sonic is the
+app's voice); a LangChain deepagents task agent fetches things ("grab me a banana").
 
 Built at HackPrinceton Fall 2026 (Nov 13-15, 2026). This is a research prototype, not a medical
 device, and it has not been tested with people who have disabilities.
@@ -14,7 +14,8 @@ device, and it has not been tested with people who have disabilities.
 
 | Part | State |
 |---|---|
-| Head/eye pointer, calibration and the screen app | **works on the real arm** (team tests): the arm follows the pointer live; double blink picks up and lets go |
+| **Nose following** (the default): the arm follows the nose live, nod to pick up | tested with the pretend arm, simulated faces and a live run (whole map reached, nod pick-up and nod let-go both worked); **not yet tried on the real arm** |
+| Head/eye pointer (`--control point`) | **works on the real arm** (team tests): the arm follows the pointer live; double blink picks up and lets go |
 | Pick-up on the real arm | **works**: opens, lowers to 5 cm, closes, lifts, holds until the next double blink; gripper fixes in README steps 5c and Problems |
 | Pointer accuracy | measured on one teammate only: 7.0% of the screen width on the calibration dots (head and eyes alike); `tools/measure.py` measures it properly |
 | Amazon Nova 2 Lite (find objects) | **works through Bedrock** (live call checked); used by the task agent with a table camera |
@@ -22,7 +23,7 @@ device, and it has not been tested with people who have disabilities.
 | Nova 2 Sonic as the eye app's voice | built: reads the app's prompts aloud (live call checked: 2.5 s of speech in 2.7 s); not yet heard on the Jetson |
 | Nova 2 Sonic free speech | built: "move it a bit to the left" -> `a little left`, "pick that up please" -> `grab` (live calls checked, typed); through the microphone in the app not yet tried |
 | Task agent (LangChain deepagents) | built and tested with Nova 2 Lite as its model; **drives the arm** with `--arm` (pretend arm tested; the real arm and the table camera not yet tried) |
-| Photon caregiver messages | not built (the agent's `notify` tool is pretend) |
+| Photon caregiver messages | the two-way iMessage agent is built (`services/photon/caregiver.py`, `eyereach/notify.py`); **not yet called by the app or the task agent** (its `notify` still prints); needs a Photon beta key |
 | HoloLens 2 gaze input | not built |
 | Tested with people who have disabilities | no |
 
@@ -37,7 +38,7 @@ use their arms. Special tracks, and how each connects. The status column says wh
 | **Best Physical AI** | AI that acts in the real world: face/eye tracking (MediaPipe Face Mesh) decides where a physical arm goes, with height, speed and reach limits on every move. | **Working on the real arm** |
 | **Amazon: Best Practical AI (Nova)** | Three Amazon Nova uses, all on Bedrock (see [Amazon technology](#amazon-technology-we-use)): Nova 2 Lite names the objects on the table and boxes them, Nova 2 Lite is the task agent's brain, and Nova 2 Sonic listens and talks back. Nova's answers are only suggestions: the user still confirms before anything moves. | All three work through Bedrock and are wired in; tried on the pretend arm, **not yet on the real arm** |
 | **LangChain deepagents** | An agent turns a task ("bring me the pills") into steps: find the object, ask the user to confirm with their eyes, pick, drop, tell the caregiver. Human in the loop: `pick` refuses until the user confirmed that exact object. | Built and tested; picks with the arm through `brain/fetch.py` (pretend arm tested) |
-| **Photon (spectrum-ts)** | Planned: a caregiver gets an iMessage when the arm grabs or drops something, or when the user keeps looking at something it cannot reach. | Not built |
+| **Photon (spectrum-ts)** | A caregiver gets iMessages about what the arm did, can text STOP / RESUME / STATUS, and can ask "did he take his pills?" (Nova answers from the day's event log). | Agent built; **not yet wired to the app or the task agent** |
 
 Next: try the agent on the real arm with a table camera (a second camera looking down at the table, calibrated once
 with `launch/eyereach.sh --agent calibrate`), then Photon. Further ahead: HoloLens 2 gaze input, so the user
@@ -74,7 +75,7 @@ Design rules for the Amazon parts:
 | Technology | What it does in EyeReach |
 |---|---|
 | **LangChain deepagents** (sponsor) | `create_deep_agent` with two sub-agents (perception finds the object, caregiver writes the message), a notes file it keeps between runs (`FilesystemBackend`, `~/.eyereach/agent/notes.md`), and a written plan (`TodoListMiddleware`, `write_todos`). Model: Amazon Nova 2 Lite through `langchain-aws`. Runs in its own Python 3.12 environment (`~/eyereach_agent_venv`, made with `uv`), so ROS's Python 3.10 is untouched. |
-| **Photon spectrum-ts** (sponsor) | Planned for caregiver iMessages; not built. |
+| **Photon spectrum-ts** (sponsor) | The caregiver's two-way iMessage agent (`services/photon/caregiver.py`); not yet called by the app or the task agent. |
 | NVIDIA Jetson Orin NX 16GB | Runs everything on the robot: camera, face tracking, ROS 2, the arm. |
 | ROS 2 Humble, ROBOTIS OpenMANIPULATOR-X, DYNAMIXEL servos, OpenCR | The arm and its drivers; our code sends joint paths through `arm_controller`. |
 | MediaPipe Face Mesh | 478 face points per webcam frame: the head direction (eye corners, nose, forehead, chin) and the irises. |
@@ -91,22 +92,82 @@ The main features (details in the sections below):
   retry when poor; saved per screen and pointer, so it is reused (FIX MY AIM redoes it).
 - **Moving the arm:** live following (default) or look-and-hold; slow speeds (60 mm/s, 40 carrying); travels 12 cm
   above the table.
-- **Double blink to pick up and let go**, ignored while the head turns and in the first 3 s; big gaze buttons (and
-  mouse clicks) as a backup.
+- **The arm follows your nose (the default):** live, no holding and no setup step; the nose tip measured from the
+  point between the eyes; nod to pick up and nod again to let go; face centred in the window with a nose joystick.
+- **Pointer mode** (`--control point`): double blink to pick up and let go, big gaze buttons (and mouse clicks).
 - **A safe pick-up:** gripper opens first, lowers to 5 cm, closes, lifts and holds until the next double blink;
   gripper opened before the arm moves at start and before it stops.
 - **Gripper fixes:** a current limit so it can't overload (setup step 5c), and a start-up check that resets its turn
   count, which had made "open" drive it closed.
 - **Session log and measurement tool:** every calibration, move and pick-up in `~/.eyereach/sessions/`;
   `tools/measure.py` for accuracy (degrees) and grab success.
+- **Test everything in one command:** `launch/test_all.sh` (16 checks, never moves the real arm).
 - **One command:** `launch/eyereach.sh` loads `.env`, finds the screen, checks the gripper and joints, starts the arm
   and the app, and adds voice commands when installed. `launch/setup_jetson.sh` sets up a Jetson in one go.
-- **Voice:** offline commands (Vosk), Amazon Nova 2 Sonic conversation (`launch/talk.sh`), and the speaker's
-  microphone used first with the webcam's as fallback.
+- **Voice:** offline commands (Vosk), Amazon Nova 2 Sonic conversation (`launch/talk.sh`); the webcam's microphone
+  first, the speaker's as fallback; every phrase heard is shown, with why it was ignored.
+- **Speaker volume on screen:** QUIETER / LOUDER buttons by gaze or mouse, `+`/`-` for the helper.
 - **Amazon Nova 2 Lite** object finding and the **LangChain deepagents** task agent, which drives the arm
   ("grab me a banana": a table camera picture, Nova finds it, you confirm, the arm brings it).
 - **Nova 2 Sonic in the eye app:** its natural voice reads the prompts, and free speech ("a bit to the left")
   becomes commands next to the exact offline phrases.
+
+## Control: the arm follows your nose, nod to pick up
+
+The default (`launch/eyereach.sh`, or `--control tilt`). Nothing to hold and no setup step: the first moment the app
+sees your face, it takes that as straight, and from then on **the arm follows your nose live**, like a mouse.
+
+| Do this | The arm |
+|---|---|
+| Look straight | goes to the middle of the table |
+| Move your nose right / left (turn, or tilt the head sideways) | follows to your right / left; about 20 deg reaches the edge |
+| Move your nose up / down | follows away from you / toward you |
+| Move it back | comes back |
+| **Nod** (a quick dip and back) | picks up where it is; the next nod lets go there |
+| Lose the face | stops |
+
+- **The nose guides it.** The point between your eyes is the reference, and the arm follows where your nose tip is
+  from where it sat when you looked straight (in eye-widths, `gaze_webcam.nose_offset`), so it reads the same
+  wherever your face is in the camera's picture and whatever the camera's angle. (The earlier 3D head angle read
+  41 deg "straight" with the webcam off to the side and drifted, so the arm moved right while you looked straight.)
+- **Live:** readings are smoothed a little so jitter doesn't shake the arm; movements under 1.5 deg count as straight.
+  The arm glides at up to 100 mm/s (60 carrying) so it keeps up.
+- **FIX MY AIM** (or **C**) takes "straight" again, at once, from where your nose is now.
+- **On screen:** your face big in the middle of the window, mirrored and centred, with LEFT / RIGHT / AWAY (top) /
+  TOWARD YOU (bottom) on its sides (the one the arm is heading toward lights up) and an arrow showing where the arm
+  is going; a cross between the eyes, a dot on the nose tip and a green circle where the nose sits when straight; and
+  under the face a **nose joystick** (the dot is where your nose is; green inside the ring = straight). The map
+  (where the arm is, away from you at the top) and the volume are on the left, the buttons on the right.
+- **Blinking does nothing** in this mode; the on-screen buttons work with a mouse click for a helper, and "Stop" by
+  voice always works. `--control point` is the older screen-pointer mode; `HeadTilt(mode="joystick")` the
+  hold-to-move variant.
+- **Check it with your own head (no arm):** `~/eyereach_venv/bin/python -m eyereach.head_tilt`. The settings
+  (REACH, STEADY, SMOOTH, the nod) are at the top of `eyereach/head_tilt.py`.
+
+**"I can't see your face" when the face was there:** MediaPipe found the face in 98% of frames; the message came from
+other checks (in pointer mode, the pointer past the screen edge or narrow eyes). The face was also low in the camera
+picture, so nodding or turning pushed it out: the app warns the helper when the face is near an edge, tracking keeps a
+turned face longer, and a drop-out under 0.25 s doesn't stop the arm. **Put the camera so the face is in the middle of
+its picture.**
+
+## Test everything (one command)
+
+```bash
+launch/test_all.sh              # everything, about 2 minutes (2 small AWS calls)
+launch/test_all.sh --offline    # no AWS calls      --no-sim: skip the simulation      --no-sound: no beep or voice
+```
+
+It **never moves the real arm** and ends with a PASS / FAIL / SKIP table (exit code 1 if anything failed):
+1. **Environments and keys:** both Python environments; `.env` loads the AWS keys (values never printed) and is git-ignored.
+2. **Unit tests** in both environments, and the robot maths (`brain/arm.py test`).
+3. **Devices:** a webcam frame, the OpenCR, the servos and the gripper's turn count (read only), which microphone is
+   picked and that it records, and a beep on the speaker.
+4. **The arm's motion on the ROS simulation** (`tools/sim_check.py`, fake hardware, same code as the real arm): the
+   gripper starts closed and start-up opens it; a double blink goes down open to the pick-up height, closes, lifts and
+   holds; the next double blink opens it; it is open after stopping.
+5. **Amazon on Bedrock:** one Nova 2 Lite call on the webcam photo, and one Nova 2 Sonic reply played on the speaker.
+
+Then try the real arm (someone holds it): `launch/eyereach.sh`, and talk to it: `launch/talk.sh`.
 
 ## Offline voice commands
 
@@ -115,6 +176,25 @@ mode switching, bounded spoken moves, and interruptible pickup with robot feedba
 See [Jetson voice setup and commands](docs/jetson-voice.md) for installation and testing.
 Use `bash launch/setup_voice.sh` once, then `launch/eyereach.sh --no-arm --voice`.
 `launch/eyereach.sh` turns voice commands on by itself once they are installed; `--no-voice` keeps vision only.
+
+**Voice or vision, never both.** Say "Robot use voice" (or click USE VOICE) and only spoken commands move the arm,
+straight away: the nose and nods are ignored. In voice mode "robot" can be left out: "move left", "move right", "move
+closer" / "move back" / "come closer", "move away" / "move forward", "a little left", "grab the item", "let go". (In
+vision mode those short forms are ignored, so ordinary talk can't move anything; switching mode always needs "Robot
+use voice" / "Robot use vision".) "Robot use vision" goes back: then "Robot move left/right/..." is
+ignored and the nose moves the arm. "Stop" always works, in both.
+
+**What listens and what talks:** commands are recognised offline by **Vosk** (`vosk-model-small-en-us-0.15`, only the
+fixed phrases) on the webcam's microphone. The app talks back with the Jetson's built-in **espeak-ng** voice (through
+`spd-say`), now also when voice commands are on: while it speaks, the microphone hears silence, until 0.3 s after the
+speech really ends, so it can't take its own voice for a command (so a spoken "Stop" isn't heard during a prompt; the
+STOP button, a mouse click or Space work then). Amazon Nova 2 Sonic is the natural voice in `launch/talk.sh`, separate
+from the eye app.
+
+**When a voice command doesn't work,** the bottom of the screen says what was heard and why it was ignored, for
+example `Heard: robot move lift - not a command` or `Heard: robot move left - not sure (0.62, needs 0.70)`; the session
+log keeps them as `voice heard`. Every word must reach 0.70 confidence (lowered from 0.80, which dropped too many real
+commands); "Stop" always acts at once. Practise without the robot: `~/eyereach_venv/bin/python -m eyereach.voice_commands`.
 
 ## How it works
 
@@ -177,6 +257,10 @@ uses the head for the rough spot and the eyes to fine-tune. Not yet measured on 
   or nodding changes how open the eyes look) and not in the first 3 s after the face appears.
 - **Buttons:** PICK UP / LET GO, STOP / MOVE AGAIN, and FIX MY AIM. USE VOICE / USE VISION switches movement input hands-free. No fixed HOME or DROP-OFF
   buttons or map boxes. Buttons support gaze dwell (0.65 s by default, set with `--dwell`) and mouse clicks.
+- **Speaker volume:** under the face picture, a bar with the volume and two big buttons, **QUIETER** and **LOUDER**
+  (10% per press). Look and hold, like the other buttons, or click; keep looking and it keeps stepping. They always
+  work, even mid pick-up. The helper can press **+** and **-**. It is the system speaker volume (`pactl`), so it is
+  the same for Nova 2 Sonic (`launch/talk.sh`); `python3 -m eyereach.speaker_volume 70` sets it from a terminal.
 - **Losing the eyes** (looking away, closing them, the face out of view) never starts anything.
 - **Helper keys:** Esc closes, C calibrates again, Space pauses, V hides/shows the face picture. Options:
   `--pointer head|eyes|both`, `--dwell 2`,
@@ -207,14 +291,16 @@ launch/talk.sh --list                 # audio devices; pick with --microphone N 
 - Sonic only answers while an audio input is open, so even `--text` sends silence while it waits.
 - It runs in `~/eyereach_agent_venv` (Python 3.12, which the Sonic SDK needs); `launch/setup_jetson.sh` installs it.
 - **In the eye app** (`launch/eyereach.sh` turns both on by itself when the keys and the SDK are there; `--no-sonic`
-  turns them off): Sonic's voice reads the prompts instead of `spd-say` (only when microphone commands are off, as
-  before, so the app never hears its own instructions), and with voice commands on, Sonic also listens for free
-  speech: "move it a bit to the left", "pick that up", "hold on". Exact phrases and STOP still work offline.
-- **Microphone: the speaker's first, the webcam's as fallback** (both voice programs, `eyereach/audio_devices.py`).
-  A USB microphone that isn't a camera (the speaker's "USB PnP Audio Device") is used when it opens at 16 kHz;
-  otherwise, or when another program already has it, the webcam (the system default). PulseAudio doesn't list the
-  speaker's microphone (that card only offers output profiles), so it is opened directly. `python3 -m
-  eyereach.audio_devices` shows the choice; `EYEREACH_MIC=C920` (in `.env` or the terminal) forces the webcam.
+  turns them off): Sonic's voice reads the prompts instead of `spd-say`, and with voice commands on, Sonic also listens
+  for free speech: "move it a bit to the left", "pick that up", "hold on". Exact phrases and STOP still work offline.
+  The app talks also with voice commands on: meanwhile the offline microphone hears silence, and anything Sonic hears
+  while the app talks (and for 2 s after) is dropped, so the app never takes its own instructions for a command.
+- **Microphone: the webcam's first, the speaker's as fallback** (both voice programs, `eyereach/audio_devices.py`).
+  Measured with the same speech played through the speaker: the C920 heard it twice as loud with word confidence 0.95,
+  the speaker's microphone 0.87 (voice commands were often dropped on it). The webcam goes through PulseAudio and is
+  made the default source each start; the speaker's microphone (which PulseAudio doesn't list) is opened directly
+  when there is no webcam. `python3 -m eyereach.audio_devices` shows the choice; `EYEREACH_MIC=PnP` forces the
+  speaker's.
 - Sound devices: `pactl set-default-source` / `pactl set-default-sink` choose the system microphone and speaker
   (`pactl list short sources`, `pactl list short sinks` list them).
 
@@ -225,7 +311,9 @@ eyereach/      the control: gaze_webcam.py (face direction, iris gaze, calibrati
                eye_control.py (pointer following, dwell, double blink, pick up, let go), run_webcam.py (the screen app),
                session_log.py (the session log and its summary)
                vision_nova.py (Amazon Nova 2 Lite: names the objects on the table and gives each a box)
-               voice_commands.py (offline Vosk commands), audio_devices.py (speaker mic first, webcam as fallback)
+               head_tilt.py (turn to move, nod to pick up; python3 -m eyereach.head_tilt checks it live)
+               voice_commands.py (offline Vosk commands), audio_devices.py (webcam mic first, speaker's as fallback)
+               speaker_volume.py (the speaker volume behind QUIETER / LOUDER)
 agent/         task_agent.py: the deepagents task agent ("bring me the pills": plan, confirm, pick, drop, tell)
                voice_sonic.py: Amazon Nova 2 Sonic: talk, the eye app's voice (--speak), free speech (--commands)
 brain/         arm.py: the robot maths, plus commands to check it (test, where, go, home)
@@ -234,10 +322,12 @@ brain/         arm.py: the robot maths, plus commands to check it (test, where, 
                table camera calibration
 gestures/      gestures.py: the ROS 2 link that moves the joints
 launch/        eyereach.sh (one command: the arm and the app), talk.sh (Nova Sonic conversation),
+               test_all.sh (test everything without moving the real arm),
                setup_jetson.sh and setup_voice.sh (one-time setup), stop.sh (stop everything),
                fix_turns.py (joint and gripper turn checks before each start)
 firmware/      servo_check: an Arduino test that stands the arm up and waves
 tools/         measure.py: gaze accuracy on 9 test dots, and timed grab trials, into results/measurements.csv
+               sim_check.py: the whole pick-up on the ROS simulation (run by launch/test_all.sh)
 services/      photon/caregiver.py: the caregiver's two-way iMessage agent (Photon 2.0 beta)
 tests/         run with: python3 -m unittest discover -s tests
 dependencies.repos   the ROBOTIS code to download (setup step 5)
@@ -282,7 +372,7 @@ tasks. Nothing moves until the person confirms that exact object: `pick` refuses
 Without `--arm` the arm is pretend (no arm, camera or Photon needed). With `--arm`, `pick` runs `brain/fetch.py` in
 the arm's Python (ROS needs 3.10, the agent 3.12): it glides over the object, grabs it, carries it next to the
 person and lets go. The model is Amazon Nova 2 Lite on Bedrock, with the same AWS keys as above; `AGENT_MODEL_ID`
-changes it and `EYEREACH_NOTES` moves the notes folder. The notify tool is still pretend (Photon is not built).
+changes it and `EYEREACH_NOTES` moves the notes folder. The notify tool still prints (the Photon caregiver agent exists but isn't called from here yet).
 
 ```bash
 python3 -m agent.task_agent "bring me the pills"                     # needs Python 3.11+ (Jetson: setup step 9)

@@ -18,23 +18,29 @@ Helper keys: Esc close, C calibrate again, Space pause (the arm holds still), V 
 """
 
 import argparse
+import math
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 
 import cv2
 import numpy as np
 
-from eyereach import eye_control
+from eyereach import eye_control, speaker_volume
+from eyereach.head_tilt import DEAD, NOSE_DEPTH, REACH, STEADY, HeadTilt, nose_angles
 from eyereach.session_log import SessionLog
-from eyereach.voice_commands import AGENT_PYTHON, BothInputs, MODEL, REPO, SonicInput, VoiceInput
+from eyereach.voice_commands import AGENT_PYTHON, BothInputs, MODEL, REPO, SonicInput, VoiceInput, needs_voice_mode
 from eyereach.gaze_webcam import Camera, GazeMap, IrisGaze, OneEuro, camera_view, in_view
 
 W, H = 1280, 720                                # the picture size; set_size() changes it to the screen's
 WINDOW = "EyeReach"
 PLAY_PART = (0.32, 0.20, 0.73, 0.91)            # the table map, as parts of the picture: left top right bottom
+TILT_PLAY_PART = (0.03, 0.24, 0.29, 0.62)       # tilt control: a smaller map on the left; the face is in the middle
+MAP = {"away_up": False}       # tilt control: face in the middle, "away from you" at the top of the map
 BUTTONS_PART = (0.77, 0.20, 0.98, 0.91)         # the column of buttons
+VOLUME_PART = (0.025, 0.60, 0.30, 0.95)         # the speaker volume, under the face picture (top: volume_area)
 PLAY = (51, 122, 870, 684)                      # the table map in pixels (set by set_size)
 COLUMNS, ROWS = (0.06, 0.35, 0.65, 0.94), (0.10, 0.50, 0.90)
 DOT_SECONDS = 2.5                               # seconds of looking at each calibration dot
@@ -45,6 +51,8 @@ BG = (34, 26, 26)
 DIM, WHITE, CYAN, PINK = (150, 140, 140), (235, 235, 235), (230, 220, 90), (180, 110, 255)
 GOLD, GREEN, RED, GREY = (90, 200, 255), (120, 220, 120), (90, 90, 255), (90, 85, 85)
 RAY_COLOR = (255, 230, 120)
+TILT_LEAD = 0.2                # joystick mode: the arm heads this far (map units) ahead of where it is
+FOLLOW_SPEEDS = (100.0, 1.0, 60.0, 0.6)   # follow mode: glide mm/s, joint rad/s; then while carrying (fast enough to keep up)
 STILL_DEG_S = 25.0             # the head turning faster than this (degrees per second) isn't blinking on purpose
 TELL = {   # what to do during calibration, per pointer mode: (on screen, spoken)
     "head": ("Point your nose at the yellow dot. Turn your head, not just your eyes.",
@@ -64,7 +72,16 @@ def set_size(width, height):
     """Draw everything at this size (the screen's, in full screen)."""
     global W, H, PLAY
     W, H = int(width), int(height)
-    PLAY = rect(PLAY_PART)
+    PLAY = rect(TILT_PLAY_PART if MAP["away_up"] else PLAY_PART)
+
+
+def face_rect():
+    """Where the face picture goes: (left, top, width, height). Tilt control: big, in the middle of the window."""
+    if MAP["away_up"]:
+        fw = int(min(0.40 * W, 0.6 * H * 4 / 3))
+        return (W - fw) // 2, int(0.22 * H), fw, int(fw * 3 / 4)
+    fw = int(min(0.27 * W, 0.55 * H * 4 / 3))
+    return int(0.025 * W), int(0.25 * H), fw, int(fw * 3 / 4)
 
 
 set_size(W, H)
@@ -106,22 +123,52 @@ def on_screen(point, slack=0.15):
     return min(max(x, 0.0), W - 1.0), min(max(y, 0.0), H - 1.0)
 
 
+
+
 def to_area(point):
     """Screen pixel -> (u, v) on the table map, or None outside the map."""
     left, top, right, bottom = PLAY
     u, v = (point[0] - left) / (right - left), (point[1] - top) / (bottom - top)
+    if MAP["away_up"]:
+        v = 1 - v
     return (u, v) if 0 <= u <= 1 and 0 <= v <= 1 else None
 
 
 def to_screen(u, v):
     left, top, right, bottom = PLAY
+    if MAP["away_up"]:
+        v = 1 - v
     return int(left + u * (right - left)), int(top + v * (bottom - top))
+
+
+def volume_area():
+    """The volume control's area: under the face picture and its label (whose size depends on the screen)."""
+    left, _, right, bottom = rect(VOLUME_PART)
+    if MAP["away_up"]:                             # tilt control: under the map, on the left
+        left, right, top = PLAY[0], PLAY[2], PLAY[3] + int(0.07 * H)
+    else:
+        _, face_top, _, face_height = face_rect()
+        top = face_top + face_height + int(0.075 * H)
+    return left, min(top, bottom - int(0.2 * H)), right, bottom
+
+
+def volume_rects():
+    """The QUIETER and LOUDER buttons, side by side at the bottom of the volume area: [(name, label, rect)]."""
+    left, top, right, bottom = volume_area()
+    gap = int(0.015 * W)
+    top = top + int(0.095 * H)                     # under the title and the bar
+    half = (right - left - gap) // 2
+    return [("volume down", "QUIETER", (left, top, left + half, bottom)),
+            ("volume up", "LOUDER", (left + half + gap, top, right, bottom))]
 
 
 def looking_at(ctl, point):
     """What a screen point is on: ("button", name), ("map", (u, v)) or None."""
     if point is None:
         return None
+    for name, _, (left, top, right, bottom) in volume_rects():
+        if left <= point[0] <= right and top <= point[1] <= bottom:
+            return ("button", name)
     buttons = ctl.buttons()
     for (name, _), (left, top, right, bottom) in zip(buttons, button_rects(len(buttons))):
         if left <= point[0] <= right and top <= point[1] <= bottom:
@@ -164,10 +211,70 @@ def blank():
     return np.full((H, W, 3), BG, np.uint8)
 
 
+_CROP = {"centre": None}       # the face's smoothed (x, y, size) in the camera picture, for face_crop
+_NOSE = {"centre": None}       # tilt control: the nose's offset from between the eyes when looking straight
+
+
+def set_nose_centre(nose):
+    _NOSE["centre"] = nose
+
+
+def nose_guide(view, pts, frame_size):
+    """Tilt control, drawn on the face picture: a cross between the eyes, a dot on the nose tip, a line between
+    them, and a green circle where the nose sits when looking straight (inside it, the arm stays still)."""
+    from eyereach.gaze_webcam import LEFT, NOSE, RIGHT
+    size = (view.shape[1], view.shape[0])
+    v = lambda p: in_view(p, frame_size, size)                               # noqa: E731
+    right_eye, left_eye = np.asarray(pts[RIGHT["outer"]][:2], float), np.asarray(pts[LEFT["outer"]][:2], float)
+    mid = (right_eye + left_eye) / 2
+    span = float(np.linalg.norm(left_eye - right_eye))
+    if span < 1:
+        return
+    h = (left_eye - right_eye) / span
+    down = np.array([-h[1], h[0]])
+    mid_v, nose_v = v(mid), v(pts[NOSE][:2])
+    arm = max(6, int(0.06 * span * size[0] / frame_size[0]))
+    cv2.line(view, (mid_v[0] - arm, mid_v[1]), (mid_v[0] + arm, mid_v[1]), WHITE, 2, cv2.LINE_AA)
+    cv2.line(view, (mid_v[0], mid_v[1] - arm), (mid_v[0], mid_v[1] + arm), WHITE, 2, cv2.LINE_AA)
+    cv2.line(view, mid_v, nose_v, WHITE, 2, cv2.LINE_AA)
+    centre = _NOSE["centre"]
+    if centre is not None:
+        c = v(mid + h * centre[0] * span + down * centre[1] * span)
+        radius = math.radians(DEAD) * NOSE_DEPTH * span * size[0] / frame_size[0]
+        cv2.circle(view, c, max(4, int(radius)), GREEN, 2, cv2.LINE_AA)
+    cv2.circle(view, nose_v, max(4, arm // 2 + 2), GOLD, -1, cv2.LINE_AA)
+
+
+def face_crop(frame, pts):
+    """The camera picture cut around the face, so the face is always in the middle (black past the picture's
+    edges), following it smoothly. Returns (cropped picture, the face points moved into it, its (w, h))."""
+    fh, fw = frame.shape[:2]
+    if pts is not None:
+        (x0, y0), (x1, y1) = pts.min(0), pts.max(0)
+        target = np.array([(x0 + x1) / 2, (y0 + y1) / 2, max(y1 - y0, (x1 - x0) * 0.75)])
+        last = _CROP["centre"]
+        _CROP["centre"] = target if last is None else 0.8 * last + 0.2 * target
+    centre = _CROP["centre"]
+    if centre is None:
+        return frame, pts, (fw, fh)
+    ch = int(min(max(centre[2] * 2.6, 140), fh * 1.5))     # the face fills about 40% of the height
+    cw = int(ch * 4 / 3)
+    pad = max(cw, ch)
+    big = cv2.copyMakeBorder(frame, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=(30, 24, 24))
+    x0, y0 = int(centre[0] - cw / 2), int(centre[1] - ch / 2)
+    crop = big[y0 + pad:y0 + pad + ch, x0 + pad:x0 + pad + cw]
+    return crop, (None if pts is None else pts - np.array([x0, y0], float)), (cw, ch)
+
+
 def face_panel(frame, gaze, ok, size):
-    """The mirrored face with its key points and the ray, and where the nose is on it (or None)."""
-    view = camera_view(frame, gaze.pts, size, ok, None, gaze.size)
-    nose = None if gaze.pts is None else in_view(gaze.pts[1], gaze.size, size)
+    """The mirrored face, centred, with its key points, and where the nose is on it (or None)."""
+    pts, frame_size = gaze.pts, gaze.size
+    if frame is not None:
+        frame, pts, frame_size = face_crop(frame, gaze.pts)
+    view = camera_view(frame, pts, size, ok, None, frame_size)
+    nose = None if pts is None else in_view(pts[1], frame_size, size)
+    if MAP["away_up"] and pts is not None:            # tilt control: show what guides the arm
+        nose_guide(view, pts, frame_size)
     return view, nose
 
 
@@ -183,6 +290,14 @@ def draw_ray(canvas, start, end, now):
                     RAY_COLOR, thickness(2), cv2.LINE_AA, tipLength=min(0.08, 16 / length))
 
 
+def tilt_status(ctl):
+    """The short line under the face picture: what the head is doing (tilt control) or how to move (pointing)."""
+    label = getattr(ctl, "tilt_label", None)
+    if not getattr(ctl, "tilt", False) or label is None:
+        return "Point to move"
+    return {"centre": "Straight", "hold": "Hold the tilt...", "no face": "No face"}.get(label, "Moving " + label)
+
+
 def draw(ctl, point, tracking, paused, fps, face=None):
     """The control screen, with a dedicated face panel and a calibrated aim line."""
     canvas = blank()
@@ -193,7 +308,7 @@ def draw(ctl, point, tracking, paused, fps, face=None):
     else:
         centered(canvas, ctl.instruction(), W // 2, 0.09 * H, 1.1, GOLD, 2)
     robot = ctl.robot
-    text(canvas, f"{robot.name}  |  {fps:.0f} fps   |  helper keys: Esc quit, C fix aim, Space pause, V face picture",
+    text(canvas, f"{robot.name}  |  {fps:.0f} fps   |  helper keys: Esc quit, C fix aim, Space pause, V face picture, +/- volume",
          0.01 * W, 0.025 * H, 0.4)
 
     mode = "VOICE" if ctl.control_mode == "voice" else "VISION"
@@ -203,8 +318,9 @@ def draw(ctl, point, tracking, paused, fps, face=None):
     # the table map
     left, top, right, bottom = PLAY
     cv2.rectangle(canvas, (left, top), (right, bottom), (150, 110, 130), 2)
-    centered(canvas, "near you", (left + right) // 2, top - 0.012 * H, 0.55)
-    centered(canvas, "near the arm", (left + right) // 2, bottom + 0.035 * H, 0.55)
+    near, far = ("near you", "away from you")
+    centered(canvas, far if MAP["away_up"] else near, (left + right) // 2, top - 0.012 * H, 0.55)
+    centered(canvas, near if MAP["away_up"] else "near the arm", (left + right) // 2, bottom + 0.035 * H, 0.55)
     ring = int(scale(26))
     if ctl.target is not None:                             # the chosen spot
         t = to_screen(*ctl.target)
@@ -216,6 +332,25 @@ def draw(ctl, point, tracking, paused, fps, face=None):
         color = PINK if ctl.holding else CYAN
         cv2.circle(canvas, claw, ring, color, 3, cv2.LINE_AA)
         centered(canvas, "arm", claw[0], claw[1] + ring + scale(22), 0.55, color)
+
+    # the speaker volume: a bar, and QUIETER / LOUDER buttons (gaze dwell or mouse, like the others)
+    left, top, right, _ = volume_area()
+    volume = getattr(ctl, "volume", None)
+    centered(canvas, "SPEAKER VOLUME" + ("" if volume is None else f"  {volume}%"), (left + right) // 2,
+             top + scale(22), 0.7, WHITE, 2, max_width=0.95 * (right - left))
+    bar_top, bar_height = top + int(0.045 * H), int(0.03 * H)
+    cv2.rectangle(canvas, (left, bar_top), (right, bar_top + bar_height), (60, 48, 48), -1)
+    if volume is not None:
+        cv2.rectangle(canvas, (left, bar_top), (left + int((right - left) * volume / 100), bar_top + bar_height), GOLD, -1)
+    cv2.rectangle(canvas, (left, bar_top), (right, bar_top + bar_height), DIM, 1)
+    for name, label, (bl, bt, br, bb) in volume_rects():
+        on = ctl.looking == ("button", name)
+        color = GOLD if on else WHITE
+        cv2.rectangle(canvas, (bl, bt), (br, bb), (60, 48, 48), -1)
+        if on:
+            cv2.rectangle(canvas, (bl, bt), (bl + int((br - bl) * ctl.progress), bb), (40, 110, 140), -1)
+        cv2.rectangle(canvas, (bl, bt), (br, bb), color, 3 if on else 2)
+        centered(canvas, label, (bl + br) // 2, (bt + bb) // 2 + scale(12), 0.95, color, 2, max_width=0.85 * (br - bl))
 
     # the buttons
     buttons = ctl.buttons()
@@ -232,12 +367,47 @@ def draw(ctl, point, tracking, paused, fps, face=None):
     # the face, and the ray out of the nose to where it points
     if face is not None:
         view, nose = face
-        corner = (int(0.025 * W), int(0.25 * H))
+        corner = face_rect()[:2]
         paste(canvas, view, *corner)
         centered(canvas, "YOU", corner[0] + view.shape[1] // 2, corner[1] - scale(18), 0.8, WHITE, 2)
-        centered(canvas, "Say Robot move left" if ctl.control_mode == "voice" else "Point to move", corner[0] + view.shape[1] // 2,
+        centered(canvas, "Say Robot move left" if ctl.control_mode == "voice" else tilt_status(ctl), corner[0] + view.shape[1] // 2,
                  corner[1] + view.shape[0] + scale(35), 0.65, GOLD, 2)
-        if nose is not None and point is not None and not paused:
+        angles = getattr(ctl, "tilt_angles", None)
+        if getattr(ctl, "tilt", False) and angles is not None:   # the nose joystick, under the face picture
+            radius = int(0.065 * H)
+            centre = (corner[0] + view.shape[1] // 2, int(corner[1] + view.shape[0] + scale(55) + radius + scale(12)))
+            if centre[1] + radius < H:
+                cv2.circle(canvas, centre, radius, (60, 48, 48), -1, cv2.LINE_AA)
+                cv2.circle(canvas, centre, radius, DIM, 2, cv2.LINE_AA)
+                cv2.circle(canvas, centre, max(4, int(radius * max(STEADY, 2.0) / REACH)), GREEN, 2, cv2.LINE_AA)
+                cv2.line(canvas, (centre[0] - radius, centre[1]), (centre[0] + radius, centre[1]), (90, 80, 80), 1)
+                cv2.line(canvas, (centre[0], centre[1] - radius), (centre[0], centre[1] + radius), (90, 80, 80), 1)
+                yaw, pitch = angles                         # mirror: the person's left (yaw > 0) is the screen's left
+                x = max(-1.0, min(1.0, -yaw / REACH))
+                y = max(-1.0, min(1.0, -pitch / REACH))
+                inside = math.hypot(yaw, pitch) <= max(STEADY, 2.0)
+                cv2.circle(canvas, (int(centre[0] + x * radius), int(centre[1] + y * radius)), int(scale(11)),
+                           GREEN if inside else GOLD, -1, cv2.LINE_AA)
+                text(canvas, "your nose", centre[0] + radius + scale(10), centre[1] + scale(6), 0.5, DIM)
+        direction = getattr(ctl, "tilt_dir", None)
+        if getattr(ctl, "tilt", False) and direction is not None and not paused:
+            vw, vh = view.shape[1], view.shape[0]      # a big arrow from the middle of the face, the way it moves
+            mid = (corner[0] + vw // 2, corner[1] + vh // 2)
+            tip = (int(mid[0] + direction[0] * 0.27 * vw), int(mid[1] - direction[1] * 0.27 * vh))
+            cv2.arrowedLine(canvas, mid, tip, (30, 24, 24), int(scale(14)), cv2.LINE_AA, tipLength=0.3)
+            cv2.arrowedLine(canvas, mid, tip, GOLD, int(scale(8)), cv2.LINE_AA, tipLength=0.3)
+        if getattr(ctl, "tilt", False):                # which way is which, lit up while moving that way
+            label = getattr(ctl, "tilt_label", "") or ""
+            vw, vh = view.shape[1], view.shape[0]
+            for word, (x, y) in (("LEFT", (0.1, 0.5)), ("RIGHT", (0.9, 0.5)), ("AWAY", (0.5, 0.09)),
+                                 ("TOWARD YOU", (0.5, 0.86))):
+                on = word.lower() in label
+                size, thick = (0.6, 2) if on else (0.5, 1)
+                cx, cy = int(corner[0] + x * vw), int(corner[1] + y * vh)
+                tw, th = cv2.getTextSize(word, cv2.FONT_HERSHEY_SIMPLEX, scale(size), thickness(thick))[0]
+                cv2.rectangle(canvas, (cx - tw // 2 - 6, cy - th - 6), (cx + tw // 2 + 6, cy + 6), (30, 24, 24), -1)
+                centered(canvas, word, cx, cy, size, GOLD if on else WHITE, thick)
+        if not getattr(ctl, "tilt", False) and nose is not None and point is not None and not paused:
             draw_ray(canvas, (corner[0] + nose[0], corner[1] + nose[1]), point, time.monotonic())
 
     # where the pointer is, with a ring that fills while it rests on the map
@@ -256,7 +426,10 @@ def draw(ctl, point, tracking, paused, fps, face=None):
 
 class Voice:
     """Says sentences out loud, without waiting: Amazon Nova 2 Sonic's voice with sonic=True (agent/voice_sonic.py
-    --speak, in the agent's Python 3.12), else speech-dispatcher's spd-say, also if Sonic stops. Quiet if neither."""
+    --speak, in the agent's Python 3.12), else speech-dispatcher's spd-say (the espeak-ng voice), also if Sonic stops.
+    Quiet if neither. While it speaks, the voice-command microphone hears silence (listener.mute_until), so the app
+    can't take its own voice for a command: with spd-say until 0.3 s after the speech really ends; with Sonic (which
+    doesn't say when it's done) for about as long as the sentence takes."""
 
     def __init__(self, on=True, sonic=False):
         self.sonic = None
@@ -268,23 +441,40 @@ class Voice:
                 pass
         self.on = on and (self.sonic is not None or shutil.which("spd-say") is not None)
         self.last = None
+        self.listener = None       # the VoiceInput to mute while speaking (set by the app)
+        self.speech = 0            # counts sentences, so an old one finishing doesn't unmute a newer one
 
     def say(self, sentence):
         if not self.on or not sentence or sentence == self.last:
             return
         self.last = sentence
+        self.speech += 1
+        mine = self.speech
         if self.sonic is not None and self.sonic.poll() is None:
             try:
                 self.sonic.stdin.write(" ".join(sentence.split()) + "\n")
                 self.sonic.stdin.flush()
+                if self.listener is not None:             # about as long as Sonic takes to make it and say it
+                    self.listener.mute_until = time.monotonic() + 1.5 + len(sentence.split()) / 2.3
                 return
             except OSError:
                 self.sonic = None                             # Sonic stopped: spd-say from now on
         if shutil.which("spd-say") is None:
             return
+        if self.listener is not None:
+            self.listener.mute_until = time.monotonic() + 30.0          # until the speech is done (see below)
         quiet = dict(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.Popen(["spd-say", "-C"], **quiet).wait()                # stop the last sentence
-        subprocess.Popen(["spd-say", "-r", "-25", sentence], **quiet)
+        proc = subprocess.Popen(["spd-say", "-w", "-r", "-25", sentence], **quiet)   # -w: exits when spoken
+
+        def unmute():
+            try:
+                proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                pass
+            if self.listener is not None and mine == self.speech:
+                self.listener.mute_until = time.monotonic() + 0.3
+        threading.Thread(target=unmute, daemon=True).start()
 
 
 # ---- calibration ---------------------------------------------------------------------------------
@@ -345,6 +535,59 @@ def welcome(camera, gaze, shown, voice, again=False):
         shown(canvas)
         if cv2.waitKey(1) & 0xFF == 27:
             return False
+
+
+_LOGGED = {"at": 0.0}
+
+
+def tracking_log_due(now, every=1.0):
+    if now - _LOGGED["at"] >= every:
+        _LOGGED["at"] = now
+        return True
+    return False
+
+
+def tilt_step(ctl, tilt, tracking, paused, now, voice_acted=False):
+    """One frame of tilt control: head for a spot TILT_LEAD ahead of the arm in the tilt's direction, at the
+    tilt's speed; no tilt (or no face, or paused) and the arm stops. A nod is handled before this (ctl.blink)."""
+    if tilt is not None and tilt.target is not None:   # follow mode: go to the spot the nose points to, live
+        target = tilt.target if tracking and not voice_acted and not paused else None
+        ctl.step(("map", target) if target else None, now, False,
+                 suspended=paused or (ctl.control_mode == "vision" and not tracking))
+        return target
+    moving = tracking and tilt is not None and tilt.direction is not None and not voice_acted and not paused
+    base = (ctl.robot.carry if ctl.holding else ctl.robot.normal)[0]
+    ctl.robot.glide = base * max(0.25, tilt.speed) if moving else base
+    target = None
+    if moving:
+        u, v, _ = ctl.robot.gripper_area()
+        target = (min(1.0, max(0.0, u + tilt.direction[0] * TILT_LEAD)),
+                  min(1.0, max(0.0, v + tilt.direction[1] * TILT_LEAD)))
+    ctl.step(("map", target) if target else None, now, False,
+             suspended=paused or (ctl.control_mode == "vision" and not tracking))
+    return target
+
+
+def framing_hint(gaze):
+    """A tip for the helper when the face is near an edge of the picture (turning or nodding then loses it)."""
+    if gaze.pts is None:
+        return ""
+    w, h = gaze.size
+    (x0, y0), (x1, y1) = gaze.pts.min(0), gaze.pts.max(0)
+    if h - y1 < 0.15 * h:
+        return "Helper: the face is low in the picture. Tilt the camera down a little."
+    if y0 < 0.1 * h:
+        return "Helper: the face is high in the picture. Tilt the camera up a little."
+    if x0 < 0.12 * w or w - x1 < 0.12 * w:
+        return "Helper: the face is near the side. Turn the camera toward the face."
+    return ""
+
+
+def head_angles(gaze):
+    """Tilt control's reading: (yaw, pitch, roll) degrees from the nose's place between the eyes, or None."""
+    if gaze.nose is None or gaze.pose is None:
+        return None
+    return nose_angles(gaze.nose, gaze.pose[2])
 
 
 def dot_path():
@@ -450,6 +693,9 @@ def main():
     parser.add_argument("--real", action="store_true", help="the real arm (default: a pretend arm)")
     parser.add_argument("--camera", default="0", help="camera number or path (default 0; Jetson /dev/video0)")
     parser.add_argument("--reuse", action="store_true", help="skip calibration, use the saved one")
+    parser.add_argument("--control", choices=("tilt", "point"), default="tilt",
+                        help="tilt: turn your head to move the arm, nod to pick up (default). "
+                             "point: point at the table map on the screen (needs the dot calibration)")
     parser.add_argument("--pointer", choices=("head", "eyes", "both"), default="head",
                         help="head: point with your face (steady; default). eyes: eyes only, for people who "
                              "can't move their head. both: the face for the rough spot, the eyes to fine-tune")
@@ -490,7 +736,7 @@ def main():
     size = None if args.windowed else screen_size()
     if size:
         set_size(*size)
-    camera, gaze, voice = Camera(args.camera), IrisGaze(args.pointer), Voice(on=not args.quiet and not args.voice, sonic=args.sonic_voice)
+    camera, gaze, voice = Camera(args.camera), IrisGaze(args.pointer), Voice(on=not args.quiet, sonic=args.sonic_voice)
     cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL | cv2.WINDOW_FREERATIO)
     cv2.resizeWindow(WINDOW, W, H)
     if not args.windowed:
@@ -510,7 +756,7 @@ def main():
     try:
         saved = saved_path(args.pointer)
         gmap = GazeMap.load(saved) if args.reuse and saved.exists() else None
-        if gmap is None:
+        if gmap is None and args.control == "point":
             done = calibrate(camera, gaze, show, voice, args.dot_seconds, log=log)
             if done is None:
                 return
@@ -525,6 +771,15 @@ def main():
         if not args.real:
             robot.held = True        # the pretend arm: every pick-up holds something
         ctl = eye_control.GuidedControl(robot, look=args.dwell, grab_mm=args.grab_mm, movement=args.movement)
+        ctl.volume, volume_checked = speaker_volume.get_volume(), time.monotonic()
+        head = None
+        if args.control == "tilt":                     # no screen pointer: the head's tilt moves the arm
+            ctl.movement, ctl.tilt = "follow", True
+            MAP["away_up"] = True                      # face in the middle; tilt up = away = up on the map
+            set_size(W, H)
+            head = HeadTilt()                          # the centre is taken from the first moments the face is seen
+            robot.set_speeds(*FOLLOW_SPEEDS)
+            centring = []
         if args.voice:
             device = int(args.microphone) if args.microphone and args.microphone.isdigit() else args.microphone
             if device is None:                         # the speaker's microphone first, the webcam's as fallback
@@ -533,6 +788,7 @@ def main():
             listener = VoiceInput(args.voice_model, device).start()
             if args.sonic:
                 listener = BothInputs(listener, SonicInput().start())
+            voice.listener = listener                  # it stops listening while the app talks
         microphone_failed = False
         clicks = []
 
@@ -546,23 +802,63 @@ def main():
         blinks, last_pose = eye_control.DoubleBlink(), None
         smooth, paused, last, lost_since = OneEuro(still_hz=1.2, speed_up=0.004), False, time.monotonic(), None
         view_on = True
-        face_width = int(min(0.27 * W, 0.55 * H * 4 / 3))
-        view_size = (face_width, int(face_width * 3 / 4))
+        view_size = face_rect()[2:]
         if args.reuse:
             voice.say(ctl.instruction())
         while True:
             frame, f = look(camera, gaze)
-            raw = None if f is None else on_screen(tuple(gmap.predict(f)[0]))
-            point = smooth(raw) if raw is not None else None
-            eyes_open = (gaze.opening is not None and gaze.opening >=
-                         max(0.10, 0.55 * (blinks.usual or gaze.opening)))
-            tracking = raw is not None and eyes_open
             now = time.monotonic()
+            tilt = None
+            if head is not None:                       # tilt control: a face is all it needs
+                angles = head_angles(gaze)
+                if head.centre is None and angles is not None:   # straight = the middle of the first 2 s
+                    centring.append((now, angles))
+                    if now - centring[0][0] >= 2.0:
+                        centring = [a for _, a in centring]
+                        centre = np.median(np.array(centring), axis=0)
+                        head.set_centre(*centre)
+                        set_nose_centre(gaze.nose)
+                        log.event("tilt centre", yaw=round(centre[0], 1), pitch=round(centre[1], 1),
+                                  roll=round(centre[2], 1), by="start")
+                tilt = head.update(angles, now)
+                if head.centre is not None and tracking_log_due(now):        # once a second, for the session log
+                    log.event("nose", yaw=round(tilt.yaw, 1), pitch=round(tilt.pitch, 1), label=tilt.label,
+                              target=None if tilt.target is None else [round(x, 2) for x in tilt.target],
+                              straight=[round(x, 1) for x in head.centre[:2]])
+                tracking = gaze.nose is not None and gaze.pose is not None
+                point = None
+                if tracking:
+                    u, v, _ = ctl.robot.gripper_area()
+                    if tilt.direction is not None and ctl.live_enabled:
+                        u = min(1.0, max(0.0, u + tilt.direction[0] * TILT_LEAD))
+                        v = min(1.0, max(0.0, v + tilt.direction[1] * TILT_LEAD))
+                    point = to_screen(u, v)            # the ray goes from the nose to where the arm heads
+                ctl.tilt_label = tilt.label if tracking else "no face"
+                ctl.tilt_dir = None
+                if tracking and ctl.live_enabled and tilt.target is not None:   # arrow: from the arm toward the nose's spot
+                    au, av, _ = ctl.robot.gripper_area()
+                    du, dv = tilt.target[0] - au, tilt.target[1] - av
+                    if math.hypot(du, dv) > 0.04:
+                        ctl.tilt_dir = (du / math.hypot(du, dv), dv / math.hypot(du, dv))
+                elif tracking and ctl.live_enabled:
+                    ctl.tilt_dir = tilt.direction
+                ctl.tilt_angles = (tilt.yaw, tilt.pitch) if tracking else None
+            else:
+                raw = None if f is None else on_screen(tuple(gmap.predict(f)[0]))
+                point = smooth(raw) if raw is not None else None
+                # head pointing doesn't need open eyes (narrow eyes looking down are fine); eye pointing does
+                eyes_open = args.pointer == "head" or (gaze.opening is not None and gaze.opening >=
+                                                       max(0.10, 0.55 * (blinks.usual or gaze.opening)))
+                tracking = raw is not None and eyes_open
             pose = None if gaze.pose is None else np.degrees(gaze.pose[:2])
             turning = (0.0 if pose is None or last_pose is None else
                        float(np.max(np.abs(pose - last_pose))) / max(now - last, 1e-3))   # degrees per second
             last_pose = pose
             double = blinks.update(gaze.opening, now, still=turning < STILL_DEG_S) and not paused
+            if head is not None:
+                double = False                         # tilt control: a nod picks up, blinks do nothing
+                if tilt.nod and not paused and ctl.control_mode == "vision":
+                    ctl.press("let go" if ctl.holding else "pick up", now, how="nod")
             voice_acted = False
             if listener:
                 ctl.voice_available = listener.status == "Listening" and not listener.error
@@ -571,6 +867,9 @@ def main():
                     ctl.press("stop", now)
                     microphone_failed = True
                     log.event("voice unavailable", message=listener.error)
+                for text, why, lowest in listener.poll_dropped():
+                    ctl.heard_command = f"{text} - {why}"
+                    log.event("voice heard", text=text, why=why, lowest_confidence=lowest)
                 events = listener.poll()
                 # STOP wins over every other recognized action in this batch.
                 if any(event.action == "stop" for event in events):
@@ -581,6 +880,11 @@ def main():
                     double = False
                 elif not paused and not listener.error:
                     for event in events:
+                        if (needs_voice_mode(event.text) and not event.text.endswith("(Sonic)")
+                                and ctl.control_mode != "voice"):
+                            ctl.heard_command = event.text + " - say Robot first (or Robot use voice)"
+                            log.event("voice command", text=event.text, accepted=False, why="short form in vision mode")
+                            continue
                         accepted = ctl.voice(event.action, now, event.started, event.heard)
                         ctl.heard_command = event.text + (" - accepted" if accepted else " - ignored")
                         log.event("voice command", text=event.text, accepted=accepted)
@@ -597,8 +901,17 @@ def main():
                     ctl.press(name, now, how="click")
                     ctl.dwell = eye_control.Dwell(args.dwell)
                     double = False
-            ctl.step(None if paused or not tracking or voice_acted else looking_at(ctl, point), now, double,
-                     suspended=paused or (ctl.control_mode == "vision" and not tracking))
+            if head is not None:
+                tilt_step(ctl, tilt, tracking, paused, now, voice_acted)
+            else:
+                ctl.step(None if paused or not tracking or voice_acted else looking_at(ctl, point), now, double,
+                         suspended=paused or (ctl.control_mode == "vision" and not tracking))
+            if ctl.wants_volume:                           # QUIETER / LOUDER was pressed (or + / - typed)
+                ctl.volume = speaker_volume.change(ctl.wants_volume)
+                ctl.wants_volume = 0
+                volume_checked = now
+            elif now - volume_checked > 2.0:               # follow changes made elsewhere (the volume keys)
+                ctl.volume, volume_checked = speaker_volume.get_volume(), now
             for name, details in ctl.events:
                 log.event(name, **details)
             ctl.events = []
@@ -616,6 +929,10 @@ def main():
             key = cv2.waitKey(1) & 0xFF
             if key == 27 or cv2.getWindowProperty(WINDOW, cv2.WND_PROP_VISIBLE) < 1:
                 break
+            if key in (ord("+"), ord("=")):
+                ctl.press("volume up", now, how="key")
+            elif key in (ord("-"), ord("_")):
+                ctl.press("volume down", now, how="key")
             if key == ord(" "):
                 paused = not paused
                 if paused:
@@ -627,11 +944,21 @@ def main():
                 ctl.step(None, suspended=True)
                 blinks = eye_control.DoubleBlink()
                 ctl.wants_calibration = False
-                done = calibrate(camera, gaze, show, voice, args.dot_seconds, again=True, log=log)
-                if done is None:
-                    break
-                gmap = done[0]
-                gmap.save(saved)
+                if head is not None:                   # straight = where the nose is now
+                    angles = head_angles(gaze)
+                    if angles is not None:
+                        head.set_centre(*angles)
+                        set_nose_centre(gaze.nose)
+                        log.event("tilt centre", yaw=round(angles[0], 1), pitch=round(angles[1], 1),
+                                  roll=round(angles[2], 1), by="fix aim")
+                        voice.say("Centre set.")
+                    ctl.press("resume", time.monotonic())
+                else:
+                    done = calibrate(camera, gaze, show, voice, args.dot_seconds, again=True, log=log)
+                    if done is None:
+                        break
+                    gmap = done[0]
+                    gmap.save(saved)
                 ctl.accept_after = time.monotonic()
                 if listener:
                     listener.poll()

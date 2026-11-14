@@ -83,6 +83,7 @@ class EyeControl:
 #   look away, close the eyes, or lose the face -> nothing new happens, the arm finishes and waits
 # ---------------------------------------------------------------------------------------------
 
+VOLUME_STEP = 10               # % per VOLUME - / VOLUME + press
 LOOK = 1.5                     # seconds of steady looking that press a button or choose a spot
 SPOT = 0.06                    # the gaze may wander this far (map units) and still be on one spot
 ARRIVED = 0.04                 # the claw is "there" this close to the chosen spot (map units)
@@ -187,6 +188,8 @@ class GuidedControl:
         self.progress, self.looking = 0.0, None   # for drawing the filling ring
         self.closest = (math.inf, 0.0)    # (closest the claw got to the target, when): spots out of reach
         self.say, self.events, self.wants_calibration = [], [], False
+        self.wants_volume = 0          # % for the app to change the speaker volume by (VOLUME - / +)
+        self.volume = None             # the speaker volume in %, for the screen (the app keeps it current)
         self.task_started = None       # when the person first moved the arm for this pick-and-place
         self.moved_at = None
 
@@ -212,6 +215,8 @@ class GuidedControl:
             return not busy and self.voice_available
         if name == "vision":
             return not busy
+        if name in ("volume down", "volume up"):
+            return True                                    # harmless, so always usable
         return not busy and name in ("aim", "resume")
 
     def instruction(self):
@@ -226,6 +231,8 @@ class GuidedControl:
             return "Voice control. Say Robot move left, grab the item, or release the item."
         if self.phase == "moving":
             return "Moving. Look at STOP or say Stop."
+        if getattr(self, "tilt", False):
+            return "Move your nose: the arm follows. Nod to let go." if self.holding else "Move your nose: the arm follows. Nod to pick up."
         if self.movement == "follow":
             return "Point to move. Blink twice to let go." if self.holding else "Point to move. Blink twice to pick up."
         if self.holding:
@@ -250,12 +257,15 @@ class GuidedControl:
             r.halt()
             self.control_mode = name
             self.target, self.then, self.phase = None, None, "waiting"
-            self.live_enabled = False
+            # voice mode is ready at once (the arm only moves on a spoken command); back to vision waits
+            # for MOVE AGAIN, so the nose can't make the arm jump to where it points
+            self.live_enabled = name == "voice"
             self.holding = bool(r.closed)
             r.carrying(self.holding)
             self.accept_after = now
             self.dwell = Dwell(self.dwell.seconds)
-            self.say.append(f"{name.title()} mode ready. Use MOVE AGAIN to enable movement.")
+            self.say.append("Voice mode. Say move left, move right, move closer or move away." if name == "voice" else
+                            "Vision mode. Say Robot resume, or look at MOVE AGAIN, to follow your nose.")
             self.events.append(("control mode", {"mode": name, "by": how}))
         elif name == "pick up" and r.grab(self.grab_mm):
             self.target = None
@@ -291,6 +301,10 @@ class GuidedControl:
             self.target, self.then, self.phase = None, None, "waiting"
             self.say.append("Stopped.")
             self.events.append(("stop", {}))
+        elif name in ("volume down", "volume up"):
+            self.wants_volume = VOLUME_STEP if name == "volume up" else -VOLUME_STEP
+            self.dwell = Dwell(self.dwell.seconds)         # keep looking at it: it steps again
+            self.events.append(("volume", {"change": self.wants_volume, "by": how}))
         elif name == "aim":
             r.halt()
             self.accept_after = now

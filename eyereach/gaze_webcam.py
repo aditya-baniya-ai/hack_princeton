@@ -88,6 +88,23 @@ def head_pose(pts3, size):
     return yaw, pitch, roll, pts3[NOSE][0] / w, pts3[NOSE][1] / h, out, span
 
 
+def nose_offset(pts):
+    """Where the nose tip is from the point between the eyes, in eye-widths, measured along the face's own
+    across and down directions: (sideways, down). Sideways > 0 is toward the picture's right (the person's
+    own left, as the face turns left); down shrinks as the head tilts up. Only the 2D picture is used, so it
+    doesn't depend on the depth guess, and dividing by the eye width makes it the same near or far."""
+    pts = np.asarray(pts, float)
+    right_eye, left_eye = pts[RIGHT["outer"], :2], pts[LEFT["outer"], :2]
+    across = left_eye - right_eye
+    span = float(np.linalg.norm(across))
+    if span < 1e-6:
+        return None
+    h = across / span
+    v = np.array([-h[1], h[0]])
+    off = pts[NOSE, :2] - (left_eye + right_eye) / 2
+    return float(off @ h / span), float(off @ v / span)
+
+
 def head_ray(pose, pts):
     """The nose tip and the end of the ray out of the face, in frame pixels: ((x, y), (x, y))."""
     out, span = pose[5], pose[6]
@@ -105,10 +122,11 @@ class IrisGaze:
         self.mode = mode
         self.mesh = mp.solutions.face_mesh.FaceMesh(
             max_num_faces=1, refine_landmarks=True,
-            min_detection_confidence=0.5, min_tracking_confidence=0.5)
+            min_detection_confidence=0.5, min_tracking_confidence=0.3)   # keep a turned or edge face
         self.pts = None          # landmarks of the last frame (None: no face), for the camera view
         self.opening = None      # how open the eyes were in the last frame (None: no face), for blinks
         self.pose = None         # head_pose() of the last frame, for the ray
+        self.nose = None         # nose_offset() of the last frame: where the nose is from between the eyes
         self.size = (640, 480)
 
     def features(self, frame):
@@ -117,12 +135,13 @@ class IrisGaze:
         self.size = (w, h)
         found = self.mesh.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)).multi_face_landmarks
         if not found:
-            self.pts, self.opening, self.pose = None, None, None
+            self.pts, self.opening, self.pose, self.nose = None, None, None, None
             return None
         marks = found[0].landmark
         self.pts = np.array([(p.x * w, p.y * h) for p in marks])
         self.opening = eye_opening(self.pts)
         self.pose = head_pose([(p.x * w, p.y * h, p.z * w) for p in marks], (w, h))
+        self.nose = nose_offset(self.pts)
         head = None if self.pose is None else np.array(self.pose[:5])
         if self.mode == "head":
             return head                            # blinking doesn't move a head pointer
