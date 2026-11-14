@@ -16,23 +16,30 @@ Built at HackPrinceton Fall 2026 (Nov 13-15, 2026).
 - `eyereach/eye_control.py`: gaze point to table point, dwell to confirm, grab, hold, drop.
   The claw must be where the user is looking before it grabs or drops, and if gaze tracking is
   lost the arm holds still.
-- `tests/test_eye_control.py`: runs with the driver's pretend arm.
+- `eyereach/gaze_webcam.py`: webcam eye tracking (MediaPipe iris landmarks), a calibration that maps
+  the eyes to screen pixels, and smoothing.
+- `eyereach/run_webcam.py`: the screen app. Calibrate on 12 dots, then look at a map of the table
+  and the arm follows your gaze. Step one before the HoloLens, which will look at the real table instead.
+- `tests/`: gaze maths, the screen drawing and the control loop, with the pretend arm.
 
 ## Status
 
 | Part | State |
 |---|---|
-| Gaze-to-arm logic | tested with the pretend arm only (no robot, no HoloLens) |
-| HoloLens 2 gaze input | not built yet |
-| Gaze-to-table calibration | not built yet |
-| Real arm | not tested with this code yet |
+| Gaze-to-arm logic and the screen app | tested with made-up landmarks and the pretend arm; **not yet tried with a real face or the real arm** |
+| Webcam gaze accuracy | unknown until measured on a person |
+| HoloLens 2 gaze input | not built yet (next) |
 | Uncertainty handling (ask for confirmation when unsure) | not built yet |
 
 ## Run
 
 ```bash
 git clone https://github.com/aditya-baniya-ai/hack_princeton.git
+cd hack_princeton
+pip install -r requirements.txt
 python3 -m unittest discover -s tests
+python3 -m eyereach.run_webcam            # pretend arm first
+python3 -m eyereach.run_webcam --real     # real arm, on the Jetson
 ```
 
 This is a research prototype, not a medical device, and it has not been tested with people
