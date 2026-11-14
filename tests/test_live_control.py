@@ -94,10 +94,19 @@ class PickupSequenceTest(unittest.TestCase):
         self.assertAlmostEqual(height(robot.plan[0][1]), eye_control.HOVER_MM, places=4)  # 4. lifts
         self.assertTrue(robot.closed)                                # ... and stays closed
 
-    def test_small_object_is_not_automatically_released(self):
+    def test_closing_on_nothing_opens_again_and_holding_stays_closed(self):
         robot = Mock()
         robot.closed = True
-        robot.holding.return_value = False
+        robot.holding.return_value = False                # fingers closed all the way: nothing there
+        robot.busy.return_value = False
+        ctl = GuidedControl(robot, movement="follow")
+        ctl.phase = "picking"
+        ctl.step(None, now=1)
+        self.assertFalse(ctl.holding)
+        robot.open_here.assert_called_once()
+        robot = Mock()
+        robot.closed = True
+        robot.holding.return_value = True                 # stopped partway: holding something
         robot.busy.return_value = False
         ctl = GuidedControl(robot, movement="follow")
         ctl.phase = "picking"

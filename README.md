@@ -85,9 +85,11 @@ uses the head for the rough spot and the eyes to fine-tune. Not yet measured on 
   according to the robot model. Blink twice quickly, look at PICK UP for 0.65 s, or click it: the arm
   opens the gripper and waits one second, lowers to 50 mm (5 cm) with it open, closes it fully, waits one
   second for closure, then lifts back to
-  its travel height. It stays closed even if the joint-position estimate misses a small object.
-  Move to any desired position, then blink twice or use LET GO to open there without lowering.
-  Closed fingers do not prove an object was captured; session logs record the estimate separately.
+  its travel height. **The gripper is open the rest of the time:** if the fingers closed all the way (nothing
+  there), it opens again at once and says so; only when it stops partway on an object does it stay closed,
+  until the next double blink or LET GO opens it where it is. Very thin objects (under about 8 mm) close all
+  the way too, so they count as nothing. A double blink only counts while the head is holding still (turning
+  or nodding changes how open the eyes look) and not in the first 3 s after the face appears.
 - **Buttons:** PICK UP / LET GO, STOP / MOVE AGAIN, and FIX MY AIM. No fixed HOME or DROP-OFF
   buttons or map boxes. Buttons support gaze dwell (0.65 s by default, set with `--dwell`) and mouse clicks.
 - **Losing the eyes** (looking away, closing them, the face out of view) never starts anything.

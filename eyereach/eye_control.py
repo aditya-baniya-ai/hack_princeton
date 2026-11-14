@@ -120,17 +120,28 @@ class DoubleBlink:
     """Two quick blinks in a row. Measured against how open this person's eyes usually are, so it works
     for narrow and wide eyes. A long close (resting the eyes) never counts, and resets the count."""
 
-    def __init__(self, shut=0.45, longest=0.5, within=1.0):
+    def __init__(self, shut=0.45, longest=0.5, within=1.0, warm_up=3.0):
         self.shut = shut               # closed below this part of the usual opening
+        self.warm_up = warm_up         # seconds after the face appears before blinks count
+        self.seen_since = None         # when the face appeared
         self.longest = longest         # seconds: a blink is shorter than this
         self.within = within           # seconds: both blinks end within this
         self.usual = None              # usual opening, a slow average while open
         self.closed_since = None
         self.blinks = []               # times recent quick blinks ended
 
-    def update(self, opening, now):
-        """opening: eye_opening() this frame, or None with no face. True on the frame a double blink ends."""
+    def update(self, opening, now, still=True):
+        """opening: eye_opening() this frame, or None with no face. still: the head is holding still
+        (turning or nodding changes how open the eyes look, which must not count as blinking).
+        True on the frame a double blink ends."""
         if opening is None:
+            self.closed_since, self.blinks, self.seen_since = None, [], None
+            return False
+        if self.seen_since is None:
+            self.seen_since = now
+        if not still or now - self.seen_since < self.warm_up:
+            if self.usual is None or opening >= self.shut * self.usual:
+                self.usual = opening if self.usual is None else 0.97 * self.usual + 0.03 * opening
             self.closed_since, self.blinks = None, []
             return False
         if self.usual is not None and opening < self.shut * self.usual:
@@ -300,14 +311,18 @@ class GuidedControl:
                 else:
                     self.say.append("Arrived." if arrived else "That is as far as the arm can reach.")
         elif self.phase == "picking" and not r.busy():
-            # Closed/open is the user's pick/release toggle. A narrow object may look
-            # like an empty close to the joint-position heuristic; never reopen it.
+            # The gripper stays open unless it is really holding something: closing on nothing
+            # (the fingers close all the way) opens it again at once. Very thin objects (under
+            # about 8 mm) also close all the way, so they count as nothing.
             detected = r.holding()
-            self.holding = r.closed
+            if not detected:
+                r.open_here()
+            self.holding = detected
             r.carrying(self.holding)
             self.phase = "there" if self.holding else "waiting"
-            self.events.append(("picked", {"holding": detected, "closed": self.holding}))
-            self.say.append("Gripper closed. Move to where you want to let go.")
+            self.events.append(("picked", {"holding": detected, "closed": r.closed}))
+            self.say.append("Got it. Move to where you want to let go." if detected else
+                            "Nothing there, so the gripper opened again.")
         elif self.phase == "letting go" and not r.busy():
             self.holding = False
             r.carrying(False)

@@ -147,7 +147,7 @@ OPEN, SHUT = 0.28, 0.06
 class DoubleBlinkTest(unittest.TestCase):
     def test_two_quick_blinks_fire_once(self):
         b = eye_control.DoubleBlink()
-        fired = eyes(b, [(OPEN, 2), (SHUT, 0.15), (OPEN, 0.3), (SHUT, 0.15), (OPEN, 1)])
+        fired = eyes(b, [(OPEN, 4), (SHUT, 0.15), (OPEN, 0.3), (SHUT, 0.15), (OPEN, 1)])
         self.assertEqual(len(fired), 1)
 
     def test_one_blink_or_blinks_far_apart_do_nothing(self):
@@ -160,7 +160,7 @@ class DoubleBlinkTest(unittest.TestCase):
 
     def test_works_for_narrow_eyes_and_losing_the_face_resets(self):
         b = eye_control.DoubleBlink()
-        self.assertEqual(len(eyes(b, [(0.15, 2), (0.04, 0.15), (0.15, 0.3), (0.04, 0.15), (0.15, 1)])), 1)
+        self.assertEqual(len(eyes(b, [(0.15, 4), (0.04, 0.15), (0.15, 0.3), (0.04, 0.15), (0.15, 1)])), 1)
         b = eye_control.DoubleBlink()
         self.assertEqual(eyes(b, [(OPEN, 2), (SHUT, 0.15), (None, 0.3), (SHUT, 0.15), (OPEN, 1)]), [])
 
@@ -168,10 +168,11 @@ class DoubleBlinkTest(unittest.TestCase):
 class FreePlacementTest(unittest.TestCase):
     def test_blink_pick_and_release_at_chosen_position(self):
         robot, ctl = guided()
+        robot.held = object()                          # something is under the gripper
         ctl.step(None, double_blink=True)
         self.assertEqual(ctl.phase, "picking")
         self.assertEqual(keep_looking(ctl, None, "there"), "there")
-        self.assertTrue(ctl.holding and robot.closed)  # an empty close stays closed too
+        self.assertTrue(ctl.holding and robot.closed)  # holding it: stays closed
         ctl.go((0.6, 0.5), "look", time.monotonic())
         self.assertEqual(keep_looking(ctl, None, "there"), "there")
         before = robot.gripper_area()
@@ -179,6 +180,13 @@ class FreePlacementTest(unittest.TestCase):
         self.assertEqual(keep_looking(ctl, None, "waiting"), "waiting")
         self.assertFalse(ctl.holding or robot.closed)
         self.assertLess(math.dist(before, robot.gripper_area()), 1.0)
+
+    def test_an_empty_grab_opens_again(self):
+        robot, ctl = guided()                          # nothing under the gripper
+        ctl.step(None, double_blink=True)
+        self.assertEqual(keep_looking(ctl, None, "waiting", seconds=10), "waiting")
+        self.assertFalse(ctl.holding or robot.closed)
+        self.assertEqual(ctl.buttons()[0][0], "pick up")
 
     def test_no_fixed_home_or_dropoff_controls(self):
         robot, ctl = guided()
@@ -223,6 +231,22 @@ class SessionLogTest(unittest.TestCase):
             p = session_log.summary(Path(d))["tester"]
             self.assertEqual((p["picks"], p["blinks"], p["held"], p["tasks"]), (1, 1, 1, [21.5]))
             self.assertAlmostEqual(p["cal_deg"][0], 1.62, places=1)   # 90 px of 1800 on 34 cm, at 60 cm
+
+
+
+class AccidentalBlinkTest(unittest.TestCase):
+    def test_blinks_while_turning_the_head_or_just_after_starting_do_nothing(self):
+        b = eye_control.DoubleBlink()
+        self.assertEqual(eyes(b, [(OPEN, 0.5), (SHUT, 0.15), (OPEN, 0.3), (SHUT, 0.15), (OPEN, 1)]), [])  # warm-up
+        b = eye_control.DoubleBlink()
+        eyes(b, [(OPEN, 4)])
+        fired, t = [], 4.0
+        for opening, seconds in [(SHUT, 0.15), (OPEN, 0.3), (SHUT, 0.15), (OPEN, 1)]:   # same blinks, head turning
+            for _ in range(round(seconds * 20)):
+                t += 0.05
+                fired += [t] if b.update(opening, t, still=False) else []
+        self.assertEqual(fired, [])
+        self.assertEqual(len(eyes(b, [(OPEN, 1), (SHUT, 0.15), (OPEN, 0.3), (SHUT, 0.15), (OPEN, 1)], start=t)), 1)
 
 
 if __name__ == "__main__":

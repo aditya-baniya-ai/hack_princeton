@@ -44,6 +44,7 @@ BG = (34, 26, 26)
 DIM, WHITE, CYAN, PINK = (150, 140, 140), (235, 235, 235), (230, 220, 90), (180, 110, 255)
 GOLD, GREEN, RED, GREY = (90, 200, 255), (120, 220, 120), (90, 90, 255), (90, 85, 85)
 RAY_COLOR = (255, 230, 120)
+STILL_DEG_S = 25.0             # the head turning faster than this (degrees per second) isn't blinking on purpose
 TELL = {   # what to do during calibration, per pointer mode: (on screen, spoken)
     "head": ("Point your nose at the yellow dot. Turn your head, not just your eyes.",
              "Point your nose at the yellow dot, and follow it by turning your head."),
@@ -494,7 +495,7 @@ def main():
                     clicks.append(hit[1])
 
         cv2.setMouseCallback(WINDOW, mouse)
-        blinks = eye_control.DoubleBlink()
+        blinks, last_pose = eye_control.DoubleBlink(), None
         smooth, paused, last, lost_since = OneEuro(still_hz=1.2, speed_up=0.004), False, time.monotonic(), None
         view_on = True
         face_width = int(min(0.27 * W, 0.55 * H * 4 / 3))
@@ -509,7 +510,11 @@ def main():
                          max(0.10, 0.55 * (blinks.usual or gaze.opening)))
             tracking = raw is not None and eyes_open
             now = time.monotonic()
-            double = blinks.update(gaze.opening, now) and not paused
+            pose = None if gaze.pose is None else np.degrees(gaze.pose[:2])
+            turning = (0.0 if pose is None or last_pose is None else
+                       float(np.max(np.abs(pose - last_pose))) / max(now - last, 1e-3))   # degrees per second
+            last_pose = pose
+            double = blinks.update(gaze.opening, now, still=turning < STILL_DEG_S) and not paused
             if clicks:
                 name = clicks.pop(0)
                 clicks.clear()
