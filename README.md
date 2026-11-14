@@ -15,6 +15,23 @@ device, and it has not been tested with people who have disabilities.
 | HoloLens 2 gaze input | not built yet (next) |
 | Uncertainty handling (ask for confirmation when unsure) | not built yet |
 
+## Tracks and sponsors
+
+Main track: **Healthcare**. EyeReach restores a basic action (picking something up) to a person who cannot
+use their arms. Special tracks, and how each connects. The status column says what exists today.
+
+| Track | How EyeReach connects | Status |
+|---|---|---|
+| **Best Hardware** | A physical system: OpenMANIPULATOR-X arm, OpenCR board, Jetson Orin NX and a webcam, wired and driven by our own control code. | Arm driver and gaze control written; real-arm test pending |
+| **Best Physical AI** | AI that acts in the real world: gaze estimation (MediaPipe iris landmarks) decides where a physical arm goes, with safety limits on every move. | Same as above |
+| **Amazon: Best Practical AI (Nova)** | Gaze alone cannot say *what* to pick up. Planned: send the camera view to Amazon Nova to name the objects on the table and give each a box; the user looks at an object's box, holds to confirm, and the arm goes to it. Nova's answer is only a suggestion, so the user still confirms, and when it is unsure the system asks instead of guessing. | Not built |
+| **LangChain deepagents** | Planned: an agent turns a spoken or typed task ("bring me the pills") into steps: find the object, ask the user to confirm with their eyes, move, grab, drop. It uses human-in-the-loop so the arm never acts on a plan the user has not approved. | Not built |
+| **Photon (spectrum-ts)** | Planned: a caregiver gets an iMessage when the arm grabs or drops something, or when the user keeps looking at an object it cannot reach, so the user does not have to be watched in person. | Not built |
+
+Planned order: the real-arm eye control first, then Nova, then deepagents, then Photon. If time runs short, the later
+ones are dropped, and nothing in the table above is claimed as working until its status says so. Further ahead:
+HoloLens 2 gaze input, so the user looks at real objects instead of a screen map.
+
 ## How it works
 
 ```
