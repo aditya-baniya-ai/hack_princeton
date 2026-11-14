@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "game"))   # arm_link adds ../brain itself
+sys.path.insert(0, str(ROOT / "brain"))
 import arm_link  # noqa: E402
 
 DWELL = 0.8                    # seconds of steady gaze that count as "yes"
