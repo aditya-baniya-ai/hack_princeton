@@ -8,6 +8,11 @@ import unittest
 from itertools import count
 from pathlib import Path
 
+try:
+    import deepagents  # noqa: F401  (needs Python 3.11+; on the Jetson it lives in ~/eyereach_agent_venv)
+except ImportError:
+    raise unittest.SkipTest("deepagents is not installed in this Python")
+
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
 from pydantic import Field

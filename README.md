@@ -170,7 +170,7 @@ The tools are pretend for now (no arm, camera or Photon needed). The model is Am
 same AWS keys as above; `AGENT_MODEL_ID` changes it and `EYEREACH_NOTES` moves the notes folder.
 
 ```bash
-python3 -m agent.task_agent "bring me the pills"                     # pretend table; answer y or n when asked
+python3 -m agent.task_agent "bring me the pills"                     # needs Python 3.11+ (Jetson: setup step 9)
 python3 -m agent.task_agent "bring me the snack" --photo table.jpg   # objects found by Nova in a photo
 ```
 
@@ -206,6 +206,16 @@ center and equals 0 rad in ROS. ROBOTIS's default position gains are P/I/D 800/1
   12 V on. The programs check this at startup and refuse to move the arm if a joint is out of range.
 
 ## One-time setup (on the Jetson)
+
+**Quick way:** do step 1 below on a Mac or PC, clone the repo (step 3), then run steps 2 and 4 to 9 with one script.
+It checks each step first and skips what is done, so it is safe to run again. It asks for your password and never
+moves the arm.
+
+```bash
+bash launch/setup_jetson.sh            # add --voice for the offline voice commands
+```
+
+The steps below are what it does, if you want to do them by hand.
 
 ### 1. Upload the firmware to the OpenCR (on a Mac or PC)
 
@@ -329,6 +339,23 @@ python3 -c "import site; print(site.getusersitepackages())" > ~/eyereach_venv/li
 ```
 
 NumPy must still be 1.x. To undo all of it: `rm -rf ~/eyereach_venv`.
+
+### 9. Python 3.12 for the task agent, once
+
+The task agent uses LangChain `deepagents`, which needs Python 3.11 or newer, and the Jetson has 3.10. It gets its own
+environment, `~/eyereach_agent_venv`. `uv` downloads Python 3.12 for it, so the system Python and ROS are not touched.
+The eye tracker and the arm stay in `~/eyereach_venv` (Python 3.10, because ROS 2 Humble needs it).
+
+```bash
+python3 -m pip install --user uv
+export PATH="$HOME/.local/bin:$PATH"
+uv venv --python 3.12 ~/eyereach_agent_venv
+uv pip install --python ~/eyereach_agent_venv/bin/python "deepagents>=0.7" "langchain-aws>=1.0" boto3 numpy opencv-python-headless
+~/eyereach_agent_venv/bin/python -m unittest tests.test_task_agent           # from the repo folder
+~/eyereach_agent_venv/bin/python -m agent.task_agent "bring me the pills"
+```
+
+To undo: `rm -rf ~/eyereach_agent_venv`. On a laptop with Python 3.11+ none of this is needed.
 
 ## Run it with the arm
 
