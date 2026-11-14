@@ -32,6 +32,14 @@ Planned order: the real-arm eye control first, then Nova, then deepagents, then 
 ones are dropped, and nothing in the table above is claimed as working until its status says so. Further ahead:
 HoloLens 2 gaze input, so the user looks at real objects instead of a screen map.
 
+## Voice and vision test branch
+
+The `test/voice-vision-control` branch adds offline microphone commands, gaze-based
+mode switching, bounded spoken moves, and interruptible pickup with robot feedback.
+See [Jetson voice setup and commands](docs/jetson-voice.md) for installation and testing.
+Use `bash launch/setup_voice.sh` once, then `launch/eyereach.sh --no-arm --voice`.
+The launcher enables voice by default on this branch; `--no-voice` keeps vision only.
+
 ## How it works
 
 ```
@@ -51,7 +59,7 @@ OpenCR (usb_to_dxl)        passes commands to the servos, which report their ang
 ```
 
 How the control behaves. It is made for someone who can't use their arms: after a helper starts it, nothing
-needs a keyboard, and the screen (and a voice, through `spd-say`) always says what to do next.
+needs a keyboard, and the screen always says what to do next. With microphone commands off, `spd-say` can also speak prompts.
 
 ### Known problem: pointing with the eyes alone is jumpy
 
@@ -78,8 +86,7 @@ uses the head for the rough spot and the eyes to fine-tune. Not yet measured on 
   A larger mirrored face panel stays to the left of the map, and one aim line connects the nose to the
   calibrated pointer. The arm keeps its limits of 60 mm/s (40 mm/s while carrying); the pointer uses
   responsive adaptive smoothing. Looking at the face panel or buttons stops live following.
-  Closing the eyes, losing tracking, or pausing stops new movement commands. An in-progress pickup/release
-  finishes its existing sequence. STOP stays stopped until you look at MOVE AGAIN.
+  Closing the eyes, losing tracking, or pausing stops new movement commands. Pickup/release uses robot feedback; STOP interrupts the sequence and holds the arm. STOP stays stopped until you look at MOVE AGAIN.
   Use `--movement dwell` for the previous destination-based mode.
 - **Pick up / let go anywhere:** the fingertips start and travel about 120 mm (12 cm) above the table,
   according to the robot model. Blink twice quickly, look at PICK UP for 0.65 s, or click it: the arm
@@ -92,7 +99,7 @@ uses the head for the rough spot and the eyes to fine-tune. Not yet measured on 
   to tell whether something was caught, so it is only written to the session log.) A double blink only counts
   while the head is holding still (turning
   or nodding changes how open the eyes look) and not in the first 3 s after the face appears.
-- **Buttons:** PICK UP / LET GO, STOP / MOVE AGAIN, and FIX MY AIM. No fixed HOME or DROP-OFF
+- **Buttons:** PICK UP / LET GO, STOP / MOVE AGAIN, and FIX MY AIM. USE VOICE / USE VISION switches movement input hands-free. No fixed HOME or DROP-OFF
   buttons or map boxes. Buttons support gaze dwell (0.65 s by default, set with `--dwell`) and mouse clicks.
 - **Losing the eyes** (looking away, closing them, the face out of view) never starts anything.
 - **Helper keys:** Esc closes, C calibrates again, Space pauses, V hides/shows the face picture. Options:
@@ -113,6 +120,7 @@ eyereach/      the control: gaze_webcam.py (face direction, iris gaze, calibrati
                eye_control.py (pointer following, dwell, double blink, pick up, let go), run_webcam.py (the screen app),
                session_log.py (the session log and its summary)
                vision_nova.py (Amazon Nova: names the objects on the table and gives each a box)
+agent/         task_agent.py: the deepagents task agent ("bring me the pills": plan, confirm, pick, drop, tell)
 brain/         arm.py: the robot maths, plus commands to check it (test, where, go, home)
                arm_link.py: the arm follows a point, grabs and releases (or a pretend arm)
 gestures/      gestures.py: the ROS 2 link that moves the joints
@@ -151,6 +159,21 @@ python3 -m eyereach.vision_nova table.jpg "the pills"    # also says which objec
 
 If Nova cannot be reached it logs a warning and returns no objects; the app keeps running. The tests use saved answers
 in `tests/fixtures/`, so they need no network.
+
+### The task agent (LangChain deepagents)
+
+`agent/task_agent.py` takes a task like "bring me the pills" and plans it: a perception sub-agent finds the object,
+the person confirms it with their eyes, the arm picks and drops it, and a caregiver sub-agent sends a message. It keeps
+a notes file (`~/.eyereach/agent/notes.md`, e.g. "medicine: the pill bottle, next to the cup") and reads it on later
+tasks. Nothing moves until the person confirms that exact object: `pick` refuses otherwise, whatever the model says.
+
+The tools are pretend for now (no arm, camera or Photon needed). The model is Amazon Nova 2 Lite on Bedrock, with the
+same AWS keys as above; `AGENT_MODEL_ID` changes it and `EYEREACH_NOTES` moves the notes folder.
+
+```bash
+python3 -m agent.task_agent "bring me the pills"                     # needs Python 3.11+ (Jetson: setup step 9)
+python3 -m agent.task_agent "bring me the snack" --photo table.jpg   # objects found by Nova in a photo
+```
 
 ### Measuring it (accuracy and grab times)
 
@@ -198,6 +221,16 @@ center and equals 0 rad in ROS. ROBOTIS's default position gains are P/I/D 800/1
   12 V on. The programs check this at startup and refuse to move the arm if a joint is out of range.
 
 ## One-time setup (on the Jetson)
+
+**Quick way:** do step 1 below on a Mac or PC, clone the repo (step 3), then run steps 2 and 4 to 9 with one script.
+It checks each step first and skips what is done, so it is safe to run again. It asks for your password and never
+moves the arm.
+
+```bash
+bash launch/setup_jetson.sh            # add --voice for the offline voice commands
+```
+
+The steps below are what it does, if you want to do them by hand.
 
 ### 1. Upload the firmware to the OpenCR (on a Mac or PC)
 
@@ -321,6 +354,23 @@ python3 -c "import site; print(site.getusersitepackages())" > ~/eyereach_venv/li
 ```
 
 NumPy must still be 1.x. To undo all of it: `rm -rf ~/eyereach_venv`.
+
+### 9. Python 3.12 for the task agent, once
+
+The task agent uses LangChain `deepagents`, which needs Python 3.11 or newer, and the Jetson has 3.10. It gets its own
+environment, `~/eyereach_agent_venv`. `uv` downloads Python 3.12 for it, so the system Python and ROS are not touched.
+The eye tracker and the arm stay in `~/eyereach_venv` (Python 3.10, because ROS 2 Humble needs it).
+
+```bash
+python3 -m pip install --user uv
+export PATH="$HOME/.local/bin:$PATH"
+uv venv --python 3.12 ~/eyereach_agent_venv
+uv pip install --python ~/eyereach_agent_venv/bin/python "deepagents>=0.7" "langchain-aws>=1.0" boto3 numpy opencv-python-headless
+~/eyereach_agent_venv/bin/python -m unittest tests.test_task_agent           # from the repo folder
+~/eyereach_agent_venv/bin/python -m agent.task_agent "bring me the pills"
+```
+
+To undo: `rm -rf ~/eyereach_agent_venv`. On a laptop with Python 3.11+ none of this is needed.
 
 ## Run it with the arm
 

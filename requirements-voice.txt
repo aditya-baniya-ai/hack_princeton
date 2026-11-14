@@ -1,0 +1,4 @@
+# Optional; installs into the existing EyeReach environment on Jetson.
+vosk==0.3.45; sys_platform != "darwin"
+vosk==0.3.44; sys_platform == "darwin"
+sounddevice>=0.4.6,<0.6

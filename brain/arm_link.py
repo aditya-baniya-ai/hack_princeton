@@ -82,6 +82,9 @@ class ArmBase:
         self.last_follow = time.monotonic()
         self.steps = []              # (time, what to do) for grab and release
         self.busy_until = 0.0        # the arm is grabbing or releasing until then
+        self.operation = None
+        self.stage = "Ready"
+        self.error = None
         self.closed = False          # the gripper is closed (holding, or tried to)
 
     def whacking(self):
@@ -109,7 +112,7 @@ class ArmBase:
 
     def busy(self):
         """Whacking, grabbing or releasing: the arm doesn't follow the hand meanwhile."""
-        return self.whacking() or time.monotonic() < self.busy_until
+        return self.operation is not None or self.whacking() or time.monotonic() < self.busy_until
 
     def follow(self, u, v):
         """Move toward this play-area position (does nothing while busy)."""
@@ -166,12 +169,29 @@ class ArmBase:
         """Go down a little, open the gripper, come back up."""
         return self.down_and_up(height, closed=False)
 
+    def _grip_stage(self, closed, following):
+        self.stage = "Closing" if closed else "Opening"
+        self.set_gripper(closed)
+        self.operation = dict(kind="grip", closed=closed, following=following,
+                              deadline=time.monotonic() + 5.0)
+
+    def _move_stage(self, goal, following=None, label="Lifting", path=None, times=None):
+        start = list(self.joints())
+        move = max(0.45, max(abs(g - j) for g, j in zip(goal, start)) / self.speed)
+        self.stage = label
+        self.operation = dict(kind="move", goal=goal, following=following,
+                              deadline=time.monotonic() + (times[-1] if times else move) + 3.0)
+        self.send(path or [goal], times or [move])
+
+    def grip_ready(self, closed):
+        """The virtual gripper completes instantly; the real one uses action feedback."""
+        return self.closed == closed
+
     def release_here(self):
-        """Open at the chosen position, without lowering or moving elsewhere."""
         if self.busy() or self.command is None:
             return False
-        self.open_here()
-        self.busy_until = time.monotonic() + GRIPPER_WAIT
+        self.error = None
+        self._grip_stage(False, None)
         return True
 
     def down_and_up(self, height, closed):
@@ -179,31 +199,118 @@ class ArmBase:
             return False
         up = list(self.joints())
         x, y, _, _ = arm.forward(up)
-        down, _ = arm.solve(x, y, height)
-        if down is None:
+        down, why = arm.solve(x, y, height)
+        if down is None or arm.path_problem(up, down):
+            self.error = why or "Pickup path is outside the workspace"
             return False
-        now = time.monotonic()
+        self.error = None
         self.command, self.aim = list(up), (x, y)
-        # Long enough that no joint goes faster than the speed limit (further down = longer)
-        move = max(0.45, max(abs(d - u) for d, u in zip(down, up)) / self.speed)
-        opening = 0.0
-        if closed:                       # picking up: open first, and only go down once it is open
-            self.set_gripper(False)
-            opening = GRIPPER_WAIT
-        self.steps = [(now + opening, lambda: self.send([down], [move])),
-                      (now + opening + move + 0.05, lambda: self.set_gripper(closed)),
-                      (now + opening + move + 0.05 + GRIPPER_WAIT, lambda: self.send([up], [move]))]
-        self.busy_until = now + opening + 2 * move + 0.1 + GRIPPER_WAIT
-        self.run_steps()                 # going down starts now when there is nothing to open
+        def lift():
+            self._move_stage(up, label="Lifting")
+        def close():
+            self._grip_stage(closed, lift)
+        def lower():
+            self._move_stage(down, close, "Lowering")
+        if closed:
+            self._grip_stage(False, lower)
+        else:
+            lower()
         return True
+
+    def recover(self):
+        """Lift vertically before allowing lateral travel after an interrupted pickup."""
+        if self.busy():
+            return False
+        x, y, z, _ = arm.forward(self.joints())
+        goal = self.hover_joints(x, y)
+        if goal is None or arm.path_problem(self.joints(), goal):
+            self.error = "Cannot recover to the travel height here"
+            return False
+        self.error = None
+        self._move_stage(goal, label="Lifting")
+        return True
+
+    def jog(self, direction, distance):
+        """Bounded movement in the person's left/right or toward/away directions."""
+        if self.busy() or direction not in ("left", "right", "toward me", "away from me"):
+            return False
+        if distance not in (5.0, 20.0):
+            return False
+        start = list(self.joints())
+        x, y, z, _ = arm.forward(start)
+        if abs(z - self.hover) > 5:
+            self.error = "Resume first to return to the travel height"
+            return False
+        angle = math.atan2(y, x - arm.BASE_X)
+        dx, dy = ((-math.sin(angle), math.cos(angle)) if direction in ("left", "right")
+                  else (math.cos(angle), math.sin(angle)))
+        sign = -1 if direction in ("left", "away from me") else 1
+        path, times, previous, elapsed = [], [], start, 0.0
+        steps = int(math.ceil(distance / 2))
+        for i in range(1, steps + 1):
+            px, py = x + sign * dx * distance * i / steps, y + sign * dy * distance * i / steps
+            u, v = point_to_area(px, py)
+            goal = self.hover_joints(px, py)
+            if not (0 <= u <= 1 and 0 <= v <= 1) or goal is None or arm.path_problem(previous, goal):
+                self.error = "That move is outside the workspace"
+                return False
+            elapsed += max(0.04, distance / steps / self.glide,
+                           max(abs(g - j) for g, j in zip(goal, previous)) / self.speed)
+            path.append(goal)
+            times.append(elapsed)
+            previous = goal
+        self.error = None
+        self.aim = (px, py)
+        self._move_stage(path[-1], label="Moving", path=path, times=times)
+        return True
+
+    def halt(self):
+        """Cancel future steps and replace the arm trajectory with a measured-position hold."""
+        self.steps = []
+        self.operation = None
+        self.busy_until = 0.0
+        self.whack_started = None
+        self.cancel_gripper()
+        if self.command is not None:
+            self.command = list(self.joints())
+            self.aim = arm.forward(self.command)[:2]
+            self.send([self.command], [0.1])
+        self.stage = "Stopped"
+
+    def cancel_gripper(self):
+        pass
+
+    def run_operation(self):
+        op = self.operation
+        if op is None:
+            return
+        if op["kind"] == "grip":
+            ready = self.grip_ready(op["closed"])
+        else:
+            ready = max(abs(g - j) for g, j in zip(op["goal"], self.joints())) <= 0.025
+        if self.error or time.monotonic() > op["deadline"]:
+            self.error = self.error or f'{self.stage} timed out'
+            self.halt()
+            return
+        if ready:
+            self.operation = None
+            if op["kind"] == "move":
+                self.command = list(op["goal"])
+                self.aim = arm.forward(self.command)[:2]
+            if op["following"]:
+                op["following"]()
+            else:
+                self.stage = "Ready"
 
     def open_here(self):
         """Open the gripper right where it is (the prize drops from there)."""
         self.steps = []
+        self.operation = None
         self.set_gripper(False)
 
     def run_steps(self):
         """Do the grab/release steps that are due (call every frame)."""
+        self.run_operation()
         now = time.monotonic()
         while self.steps and now >= self.steps[0][0]:
             self.steps.pop(0)[1]()
@@ -283,6 +390,8 @@ class RealArm(ArmBase):
         rclpy.init(args=ros_args)
         self.rclpy = rclpy
         self.node = Gesturer()
+        self.grip_future = self.grip_handle = self.grip_result = None
+        self.cancel_pending = False
 
     def start(self):
         """Check the arm, open the gripper (and wait until it reports open), then move to the
@@ -326,8 +435,47 @@ class RealArm(ArmBase):
         goal = GripperCommand.Goal()
         goal.command.position = GRIPPER_POSITION["close" if closed else "open"]
         goal.command.max_effort = 100.0
-        self.node.gripper.send_goal_async(goal)
+        self.grip_handle = self.grip_result = None
+        self.cancel_pending = False
+        self.grip_future = self.node.gripper.send_goal_async(goal)
         self.closed = closed
+
+    def cancel_gripper(self):
+        self.cancel_pending = True
+        if self.grip_handle is not None:
+            self.grip_handle.cancel_goal_async()
+            self.cancel_pending = False
+
+    def read_gripper(self):
+        if self.grip_future is not None and self.grip_future.done():
+            future, self.grip_future = self.grip_future, None
+            try:
+                self.grip_handle = future.result()
+                if not self.grip_handle.accepted:
+                    self.error = "Gripper command rejected"
+                else:
+                    self.grip_result = self.grip_handle.get_result_async()
+                    if self.cancel_pending:
+                        self.cancel_gripper()
+            except Exception as exc:
+                self.error = f"Gripper communication failed: {exc}"
+
+    def grip_ready(self, closed):
+        self.read_gripper()
+        if self.grip_result is None or not self.grip_result.done():
+            return False
+        try:
+            result = self.grip_result.result()
+        except Exception as exc:
+            self.error = f"Gripper result failed: {exc}"
+            return False
+        if result.status != 4:  # action_msgs/GoalStatus.STATUS_SUCCEEDED
+            self.error = "Gripper command did not complete; check overload or obstruction"
+            return False
+        if not closed:
+            position = self.gripper_position()
+            return position is not None and position >= OPEN_ENOUGH
+        return bool(result.result.reached_goal or result.result.stalled)
 
     def holding(self):
         """Is the gripper holding something? Closing on a ball stops the fingers
@@ -347,6 +495,10 @@ class RealArm(ArmBase):
         """Read new joint angles (call every frame)."""
         for _ in range(5):
             self.rclpy.spin_once(self.node, timeout_sec=0.0)
+        self.read_gripper()
+        from gestures import JOINTS
+        if self.command is not None and any(time.monotonic() - self.node.joint_seen.get(j, 0) > 1.0 for j in JOINTS):
+            self.error = "Arm joint feedback lost"
         self.run_steps()
 
     def joints(self):
