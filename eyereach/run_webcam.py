@@ -26,7 +26,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from eyereach import eye_control
+from eyereach import eye_control, speaker_volume
 from eyereach.session_log import SessionLog
 from eyereach.voice_commands import VoiceInput, MODEL
 from eyereach.gaze_webcam import Camera, GazeMap, IrisGaze, OneEuro, camera_view, in_view
@@ -35,6 +35,7 @@ W, H = 1280, 720                                # the picture size; set_size() c
 WINDOW = "EyeReach"
 PLAY_PART = (0.32, 0.20, 0.73, 0.91)            # the table map, as parts of the picture: left top right bottom
 BUTTONS_PART = (0.77, 0.20, 0.98, 0.91)         # the column of buttons
+VOLUME_PART = (0.025, 0.60, 0.30, 0.91)         # the speaker volume, under the face picture
 PLAY = (51, 122, 870, 684)                      # the table map in pixels (set by set_size)
 COLUMNS, ROWS = (0.06, 0.35, 0.65, 0.94), (0.10, 0.50, 0.90)
 DOT_SECONDS = 2.5                               # seconds of looking at each calibration dot
@@ -118,10 +119,23 @@ def to_screen(u, v):
     return int(left + u * (right - left)), int(top + v * (bottom - top))
 
 
+def volume_rects():
+    """The QUIETER and LOUDER buttons, side by side at the bottom of the volume area: [(name, label, rect)]."""
+    left, top, right, bottom = rect(VOLUME_PART)
+    gap = int(0.015 * W)
+    top = top + int(0.11 * H)                      # under the title and the bar
+    half = (right - left - gap) // 2
+    return [("volume down", "QUIETER", (left, top, left + half, bottom)),
+            ("volume up", "LOUDER", (left + half + gap, top, right, bottom))]
+
+
 def looking_at(ctl, point):
     """What a screen point is on: ("button", name), ("map", (u, v)) or None."""
     if point is None:
         return None
+    for name, _, (left, top, right, bottom) in volume_rects():
+        if left <= point[0] <= right and top <= point[1] <= bottom:
+            return ("button", name)
     buttons = ctl.buttons()
     for (name, _), (left, top, right, bottom) in zip(buttons, button_rects(len(buttons))):
         if left <= point[0] <= right and top <= point[1] <= bottom:
@@ -193,7 +207,7 @@ def draw(ctl, point, tracking, paused, fps, face=None):
     else:
         centered(canvas, ctl.instruction(), W // 2, 0.09 * H, 1.1, GOLD, 2)
     robot = ctl.robot
-    text(canvas, f"{robot.name}  |  {fps:.0f} fps   |  helper keys: Esc quit, C fix aim, Space pause, V face picture",
+    text(canvas, f"{robot.name}  |  {fps:.0f} fps   |  helper keys: Esc quit, C fix aim, Space pause, V face picture, +/- volume",
          0.01 * W, 0.025 * H, 0.4)
 
     mode = "VOICE" if ctl.control_mode == "voice" else "VISION"
@@ -216,6 +230,25 @@ def draw(ctl, point, tracking, paused, fps, face=None):
         color = PINK if ctl.holding else CYAN
         cv2.circle(canvas, claw, ring, color, 3, cv2.LINE_AA)
         centered(canvas, "arm", claw[0], claw[1] + ring + scale(22), 0.55, color)
+
+    # the speaker volume: a bar, and QUIETER / LOUDER buttons (gaze dwell or mouse, like the others)
+    left, top, right, _ = rect(VOLUME_PART)
+    volume = getattr(ctl, "volume", None)
+    centered(canvas, "SPEAKER VOLUME" + ("" if volume is None else f"  {volume}%"), (left + right) // 2,
+             top + scale(22), 0.7, WHITE, 2, max_width=0.95 * (right - left))
+    bar_top, bar_height = top + int(0.045 * H), int(0.03 * H)
+    cv2.rectangle(canvas, (left, bar_top), (right, bar_top + bar_height), (60, 48, 48), -1)
+    if volume is not None:
+        cv2.rectangle(canvas, (left, bar_top), (left + int((right - left) * volume / 100), bar_top + bar_height), GOLD, -1)
+    cv2.rectangle(canvas, (left, bar_top), (right, bar_top + bar_height), DIM, 1)
+    for name, label, (bl, bt, br, bb) in volume_rects():
+        on = ctl.looking == ("button", name)
+        color = GOLD if on else WHITE
+        cv2.rectangle(canvas, (bl, bt), (br, bb), (60, 48, 48), -1)
+        if on:
+            cv2.rectangle(canvas, (bl, bt), (bl + int((br - bl) * ctl.progress), bb), (40, 110, 140), -1)
+        cv2.rectangle(canvas, (bl, bt), (br, bb), color, 3 if on else 2)
+        centered(canvas, label, (bl + br) // 2, (bt + bb) // 2 + scale(12), 0.95, color, 2, max_width=0.85 * (br - bl))
 
     # the buttons
     buttons = ctl.buttons()
@@ -504,6 +537,7 @@ def main():
         if not args.real:
             robot.held = True        # the pretend arm: every pick-up holds something
         ctl = eye_control.GuidedControl(robot, look=args.dwell, grab_mm=args.grab_mm, movement=args.movement)
+        ctl.volume, volume_checked = speaker_volume.get_volume(), time.monotonic()
         if args.voice:
             device = int(args.microphone) if args.microphone and args.microphone.isdigit() else args.microphone
             if device is None:                         # the speaker's microphone first, the webcam's as fallback
@@ -576,6 +610,12 @@ def main():
                     double = False
             ctl.step(None if paused or not tracking or voice_acted else looking_at(ctl, point), now, double,
                      suspended=paused or (ctl.control_mode == "vision" and not tracking))
+            if ctl.wants_volume:                           # QUIETER / LOUDER was pressed (or + / - typed)
+                ctl.volume = speaker_volume.change(ctl.wants_volume)
+                ctl.wants_volume = 0
+                volume_checked = now
+            elif now - volume_checked > 2.0:               # follow changes made elsewhere (the volume keys)
+                ctl.volume, volume_checked = speaker_volume.get_volume(), now
             for name, details in ctl.events:
                 log.event(name, **details)
             ctl.events = []
@@ -593,6 +633,10 @@ def main():
             key = cv2.waitKey(1) & 0xFF
             if key == 27 or cv2.getWindowProperty(WINDOW, cv2.WND_PROP_VISIBLE) < 1:
                 break
+            if key in (ord("+"), ord("=")):
+                ctl.press("volume up", now, how="key")
+            elif key in (ord("-"), ord("_")):
+                ctl.press("volume down", now, how="key")
             if key == ord(" "):
                 paused = not paused
                 if paused:

@@ -83,6 +83,7 @@ class EyeControl:
 #   look away, close the eyes, or lose the face -> nothing new happens, the arm finishes and waits
 # ---------------------------------------------------------------------------------------------
 
+VOLUME_STEP = 10               # % per VOLUME - / VOLUME + press
 LOOK = 1.5                     # seconds of steady looking that press a button or choose a spot
 SPOT = 0.06                    # the gaze may wander this far (map units) and still be on one spot
 ARRIVED = 0.04                 # the claw is "there" this close to the chosen spot (map units)
@@ -187,6 +188,8 @@ class GuidedControl:
         self.progress, self.looking = 0.0, None   # for drawing the filling ring
         self.closest = (math.inf, 0.0)    # (closest the claw got to the target, when): spots out of reach
         self.say, self.events, self.wants_calibration = [], [], False
+        self.wants_volume = 0          # % for the app to change the speaker volume by (VOLUME - / +)
+        self.volume = None             # the speaker volume in %, for the screen (the app keeps it current)
         self.task_started = None       # when the person first moved the arm for this pick-and-place
         self.moved_at = None
 
@@ -212,6 +215,8 @@ class GuidedControl:
             return not busy and self.voice_available
         if name == "vision":
             return not busy
+        if name in ("volume down", "volume up"):
+            return True                                    # harmless, so always usable
         return not busy and name in ("aim", "resume")
 
     def instruction(self):
@@ -291,6 +296,10 @@ class GuidedControl:
             self.target, self.then, self.phase = None, None, "waiting"
             self.say.append("Stopped.")
             self.events.append(("stop", {}))
+        elif name in ("volume down", "volume up"):
+            self.wants_volume = VOLUME_STEP if name == "volume up" else -VOLUME_STEP
+            self.dwell = Dwell(self.dwell.seconds)         # keep looking at it: it steps again
+            self.events.append(("volume", {"change": self.wants_volume, "by": how}))
         elif name == "aim":
             r.halt()
             self.accept_after = now

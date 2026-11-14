@@ -95,6 +95,7 @@ The main features (details in the sections below):
   and the app, and adds voice commands when installed. `launch/setup_jetson.sh` sets up a Jetson in one go.
 - **Voice:** offline commands (Vosk), Amazon Nova 2 Sonic conversation (`launch/talk.sh`), and the speaker's
   microphone used first with the webcam's as fallback.
+- **Speaker volume on screen:** QUIETER / LOUDER buttons by gaze or mouse, `+`/`-` for the helper.
 - **Amazon Nova 2 Lite** object finding and the **LangChain deepagents** task agent (not yet driving the real arm).
 
 ## Test everything (one command)
@@ -185,6 +186,10 @@ uses the head for the rough spot and the eyes to fine-tune. Not yet measured on 
   or nodding changes how open the eyes look) and not in the first 3 s after the face appears.
 - **Buttons:** PICK UP / LET GO, STOP / MOVE AGAIN, and FIX MY AIM. USE VOICE / USE VISION switches movement input hands-free. No fixed HOME or DROP-OFF
   buttons or map boxes. Buttons support gaze dwell (0.65 s by default, set with `--dwell`) and mouse clicks.
+- **Speaker volume:** under the face picture, a bar with the volume and two big buttons, **QUIETER** and **LOUDER**
+  (10% per press). Look and hold, like the other buttons, or click; keep looking and it keeps stepping. They always
+  work, even mid pick-up. The helper can press **+** and **-**. It is the system speaker volume (`pactl`), so it is
+  the same for Nova 2 Sonic (`launch/talk.sh`); `python3 -m eyereach.speaker_volume 70` sets it from a terminal.
 - **Losing the eyes** (looking away, closing them, the face out of view) never starts anything.
 - **Helper keys:** Esc closes, C calibrates again, Space pauses, V hides/shows the face picture. Options:
   `--pointer head|eyes|both`, `--dwell 2`,
@@ -230,6 +235,7 @@ eyereach/      the control: gaze_webcam.py (face direction, iris gaze, calibrati
                session_log.py (the session log and its summary)
                vision_nova.py (Amazon Nova 2 Lite: names the objects on the table and gives each a box)
                voice_commands.py (offline Vosk commands), audio_devices.py (speaker mic first, webcam as fallback)
+               speaker_volume.py (the speaker volume behind QUIETER / LOUDER)
 agent/         task_agent.py: the deepagents task agent ("bring me the pills": plan, confirm, pick, drop, tell)
                voice_sonic.py: talk with Amazon Nova 2 Sonic (microphone in, spoken answers out)
 brain/         arm.py: the robot maths, plus commands to check it (test, where, go, home)
