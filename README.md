@@ -165,6 +165,17 @@ See [Jetson voice setup and commands](docs/jetson-voice.md) for installation and
 Use `bash launch/setup_voice.sh` once, then `launch/eyereach.sh --no-arm --voice`.
 `launch/eyereach.sh` turns voice commands on by itself once they are installed; `--no-voice` keeps vision only.
 
+**Voice or vision, never both.** Say "Robot use voice" (or click USE VOICE), then "Robot resume", and only spoken
+commands move the arm: the nose and nods are ignored. "Robot use vision" goes back: then "Robot move left/right/..." is
+ignored and the nose moves the arm. "Stop" always works, in both.
+
+**What listens and what talks:** commands are recognised offline by **Vosk** (`vosk-model-small-en-us-0.15`, only the
+fixed phrases) on the webcam's microphone. The app talks back with the Jetson's built-in **espeak-ng** voice (through
+`spd-say`), now also when voice commands are on: while it speaks, the microphone hears silence, until 0.3 s after the
+speech really ends, so it can't take its own voice for a command (so a spoken "Stop" isn't heard during a prompt; the
+STOP button, a mouse click or Space work then). Amazon Nova 2 Sonic is the natural voice in `launch/talk.sh`, separate
+from the eye app.
+
 **When a voice command doesn't work,** the bottom of the screen says what was heard and why it was ignored, for
 example `Heard: robot move lift - not a command` or `Heard: robot move left - not sure (0.62, needs 0.70)`; the session
 log keeps them as `voice heard`. Every word must reach 0.70 confidence (lowered from 0.80, which dropped too many real

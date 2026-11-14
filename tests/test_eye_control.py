@@ -257,3 +257,25 @@ class AccidentalBlinkTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VoiceOrVisionTest(unittest.TestCase):
+    def test_voice_mode_ignores_the_nose_and_vision_mode_ignores_voice_moves(self):
+        import time
+        robot = eye_control.arm_link.VirtualArm()
+        robot.start()
+        ctl = eye_control.GuidedControl(robot, movement="follow")
+        now = time.monotonic()
+        ctl.accept_after = now - 10
+        self.assertFalse(ctl.voice(("jog", "left", 20.0), now))          # vision mode: "move left" ignored
+        ctl.voice_available = True                                        # (the app sets it: microphone listening)
+        ctl.press("voice", now)
+        self.assertEqual(ctl.control_mode, "voice")
+        ctl.accept_after = now - 10
+        ctl.press("resume", now + 0.1)
+        start = robot.gripper_area()[:2]
+        for i in range(40):                                              # voice mode: the nose's spot ignored
+            ctl.step(("map", (0.95, 0.5)), now + 0.2 + i * 0.03)
+            time.sleep(0.03)
+        self.assertLess(abs(robot.gripper_area()[0] - start[0]), 0.02)
+        self.assertNotEqual(ctl.phase, "following")

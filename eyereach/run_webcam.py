@@ -21,6 +21,7 @@ import argparse
 import math
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -424,19 +425,36 @@ def draw(ctl, point, tracking, paused, fps, face=None):
 # ---- talking -------------------------------------------------------------------------------------
 
 class Voice:
-    """Says sentences out loud (speech-dispatcher's spd-say), without waiting. Quiet if it's missing."""
+    """Says sentences out loud (speech-dispatcher's spd-say, which uses the espeak-ng voice), without waiting.
+    Quiet if it's missing. While it speaks, the voice-command microphone hears silence (listener.mute_until),
+    so the app can't take its own voice for a command; it is unmuted 0.3 s after the speech really ends."""
 
     def __init__(self, on=True):
         self.on = on and shutil.which("spd-say") is not None
         self.last = None
+        self.listener = None       # the VoiceInput to mute while speaking (set by the app)
+        self.speech = 0            # counts sentences, so an old one finishing doesn't unmute a newer one
 
     def say(self, sentence):
         if not self.on or not sentence or sentence == self.last:
             return
         self.last = sentence
+        self.speech += 1
+        mine = self.speech
+        if self.listener is not None:
+            self.listener.mute_until = time.monotonic() + 30.0          # until the speech is done (see below)
         quiet = dict(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.Popen(["spd-say", "-C"], **quiet).wait()                # stop the last sentence
-        subprocess.Popen(["spd-say", "-r", "-25", sentence], **quiet)
+        proc = subprocess.Popen(["spd-say", "-w", "-r", "-25", sentence], **quiet)   # -w: exits when spoken
+
+        def unmute():
+            try:
+                proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                pass
+            if self.listener is not None and mine == self.speech:
+                self.listener.mute_until = time.monotonic() + 0.3
+        threading.Thread(target=unmute, daemon=True).start()
 
 
 # ---- calibration ---------------------------------------------------------------------------------
@@ -694,7 +712,7 @@ def main():
     size = None if args.windowed else screen_size()
     if size:
         set_size(*size)
-    camera, gaze, voice = Camera(args.camera), IrisGaze(args.pointer), Voice(on=not args.quiet and not args.voice)
+    camera, gaze, voice = Camera(args.camera), IrisGaze(args.pointer), Voice(on=not args.quiet)
     cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL | cv2.WINDOW_FREERATIO)
     cv2.resizeWindow(WINDOW, W, H)
     if not args.windowed:
@@ -744,6 +762,7 @@ def main():
                 from eyereach.audio_devices import pick_microphone
                 device = pick_microphone()
             listener = VoiceInput(args.voice_model, device).start()
+            voice.listener = listener                  # it stops listening while the app talks
         microphone_failed = False
         clicks = []
 

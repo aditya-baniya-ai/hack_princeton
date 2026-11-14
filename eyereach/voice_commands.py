@@ -51,6 +51,7 @@ class VoiceInput:
         self.thread = None
         self.last_heard = ''
         self.dropped = queue.Queue(maxsize=16)    # (text, why, lowest word confidence) heard but not acted on
+        self.mute_until = 0.0                     # the app is talking until then: hear silence, not itself
 
     def start(self):
         self.thread = threading.Thread(target=self._run, name='eyereach-speech', daemon=True)
@@ -63,7 +64,9 @@ class VoiceInput:
             self.done.set()
             return
         try:
-            self.audio.put_nowait((time.monotonic(), bytes(data)))
+            now = time.monotonic()
+            # while the app speaks its own prompts, pass silence so it can't take its voice for a command
+            self.audio.put_nowait((now, bytes(len(data)) if now < self.mute_until else bytes(data)))
         except queue.Full:
             self.error = 'Microphone fell behind; restart voice input'
             self.done.set()

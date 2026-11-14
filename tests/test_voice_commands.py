@@ -284,3 +284,17 @@ class DroppedPhraseTest(unittest.TestCase):
         self.assertEqual([why for _, why, _ in listener.poll_dropped()],
                          ["not a command", "not sure (0.62, needs 0.80)"])
         self.assertEqual(listener.poll_dropped(), [])
+
+
+class HearsSilenceWhileTalkingTest(unittest.TestCase):
+    def test_microphone_audio_is_silenced_while_the_app_speaks(self):
+        import time
+        from eyereach.voice_commands import VoiceInput
+        listener = VoiceInput()
+        listener.mute_until = time.monotonic() + 5
+        listener._audio(b"\x10\x20" * 800, 800, None, None)
+        listener.mute_until = 0.0
+        listener._audio(b"\x10\x20" * 800, 800, None, None)
+        muted, live = listener.audio.get_nowait()[1], listener.audio.get_nowait()[1]
+        self.assertEqual(muted, bytes(1600))
+        self.assertEqual(live, b"\x10\x20" * 800)
