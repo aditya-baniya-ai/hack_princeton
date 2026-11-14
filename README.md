@@ -8,8 +8,8 @@ Built at HackPrinceton Fall 2026 (Nov 13-15, 2026).
 ## Code
 
 - `eyereach/`, `tests/`: written at the event. Gaze control: gaze point and dwell instead of hand tracking.
-- `driver/open_manipulator_x/`: our robot-arm driver, written during the hackathon. EyeReach uses
-  `brain/arm.py` and `game/arm_link.py`.
+- `driver/open_manipulator_x/`: the OpenMANIPULATOR-X arm driver (kinematics, safety limits, following a
+  table point, grab and release). EyeReach uses `brain/arm.py` and `game/arm_link.py`.
 
 ## What is new in this repo
 

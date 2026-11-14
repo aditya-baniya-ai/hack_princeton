@@ -1,6 +1,6 @@
 """EyeReach: drive the arm with gaze instead of a hand.
 
-The arm driver (driver/open_manipulator_x, from our earlier repo; see driver/SOURCE.md) already follows a
+The arm driver (driver/open_manipulator_x) already follows a
 table point (u, v) and can grab and release. Here that point comes from where the user looks.
 Hold your gaze on the claw's spot to grab; hold it on the drop zone to let go.
 """
