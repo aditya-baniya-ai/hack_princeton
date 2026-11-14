@@ -436,7 +436,10 @@ def main():
     parser.add_argument("--quiet", action="store_true", help="no voice")
     parser.add_argument("--grab-mm", type=float, default=eye_control.GRAB_MM,
                         help=f"fingertips this high above the table when picking up (default {eye_control.GRAB_MM:.0f}, "
-                             "never below 20)")
+                             f"never below {eye_control.LOWEST_GRAB_MM:.0f})")
+    parser.add_argument("--travel-mm", type=float, default=eye_control.HOVER_MM,
+                        help=f"fingertips this high above the table at startup and while moving "
+                             f"(default {eye_control.HOVER_MM:.0f}, at least 10 above --grab-mm)")
     parser.add_argument("--person", default="anonymous", help="who is using it, for the session log")
     parser.add_argument("--screen-cm", type=float, help="width of the picture on the screen in cm (for degrees)")
     parser.add_argument("--distance-cm", type=float, help="eyes to screen in cm (for degrees)")
@@ -474,7 +477,7 @@ def main():
             gmap = done[0]
             gmap.save(saved)
         robot = eye_control.arm_link.RealArm(ros_args=ros_args) if args.real else eye_control.arm_link.VirtualArm()
-        robot.hover = eye_control.HOVER_MM
+        robot.hover = max(args.travel_mm, max(args.grab_mm, eye_control.LOWEST_GRAB_MM) + 10)
         why = robot.start()
         if why:
             print(f"Can't start the arm: {why}")

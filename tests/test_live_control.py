@@ -63,17 +63,19 @@ class LiveControlTest(unittest.TestCase):
 
 
 class PickupSequenceTest(unittest.TestCase):
-    def test_start_at_five_cm_and_lower_close_lift_in_order(self):
+    def test_start_at_travel_height_and_lower_close_lift_in_order(self):
         from eyereach import eye_control
         from unittest.mock import patch
+        self.assertGreaterEqual(eye_control.HOVER_MM, 100.0)        # 10 cm: well clear of the table
+        self.assertGreaterEqual(eye_control.GRAB_MM, 40.0)
         robot = eye_control.arm_link.VirtualArm()
         robot.hover = eye_control.HOVER_MM
         robot.start()
-        self.assertAlmostEqual(robot.gripper_area()[2], 50.0, places=4)
+        self.assertAlmostEqual(robot.gripper_area()[2], eye_control.HOVER_MM, places=4)
         with patch.object(eye_control.arm_link.time, "monotonic", return_value=100.0):
             self.assertTrue(robot.grab(eye_control.GRAB_MM))
         down = robot.plan[0][1]
-        self.assertAlmostEqual(eye_control.arm_link.arm.forward(down)[2], 20.0, places=4)
+        self.assertAlmostEqual(eye_control.arm_link.arm.forward(down)[2], eye_control.GRAB_MM, places=4)
         self.assertFalse(robot.closed)
         close_at, lift_at = [t for t, _ in robot.steps]
         with patch.object(eye_control.arm_link.time, "monotonic", return_value=close_at):
@@ -82,7 +84,7 @@ class PickupSequenceTest(unittest.TestCase):
         self.assertGreaterEqual(lift_at - close_at, 1.0)
         with patch.object(eye_control.arm_link.time, "monotonic", return_value=lift_at):
             robot.run_steps()
-        self.assertAlmostEqual(eye_control.arm_link.arm.forward(robot.plan[0][1])[2], 50.0, places=4)
+        self.assertAlmostEqual(eye_control.arm_link.arm.forward(robot.plan[0][1])[2], eye_control.HOVER_MM, places=4)
 
     def test_small_object_is_not_automatically_released(self):
         robot = Mock()

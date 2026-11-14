@@ -88,8 +88,9 @@ SPOT = 0.06                    # the gaze may wander this far (map units) and st
 ARRIVED = 0.04                 # the claw is "there" this close to the chosen spot (map units)
 HERE = 0.08                    # looking this close to where the claw already is doesn't count as a new move
 EYE_SPEEDS = (60.0, 0.6, 40.0, 0.4)   # glide mm/s, joint rad/s; then the same while carrying
-HOVER_MM = 50.0                # fingertips 5 cm above the table at startup and while carrying
-GRAB_MM = 20.0                 # fingertips this high above the table when picking up (the driver's 15 is too low)
+HOVER_MM = 100.0               # fingertips 10 cm above the table at startup and while moving or carrying
+GRAB_MM = 40.0                 # fingertips this high above the table when picking up (2 cm was too close)
+LOWEST_GRAB_MM = 30.0          # --grab-mm can't go below this
 
 
 class Dwell:
@@ -160,7 +161,7 @@ class GuidedControl:
         if movement not in ("follow", "dwell"):
             raise ValueError("movement must be follow or dwell")
         self.movement, self.live_enabled = movement, True
-        self.grab_mm = max(grab_mm, 20.0)                  # never closer to the table than 20 mm
+        self.grab_mm = max(grab_mm, LOWEST_GRAB_MM)        # never closer to the table than 3 cm
         robot.set_speeds(*speeds)
         self.target = None             # the chosen map spot (u, v), or None: the arm waits
         self.then = None               # what to do on arriving: None or "let go" (the drop-off move)

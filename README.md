@@ -81,9 +81,9 @@ uses the head for the rough spot and the eyes to fine-tune. Not yet measured on 
   Closing the eyes, losing tracking, or pausing stops new movement commands. An in-progress pickup/release
   finishes its existing sequence. STOP stays stopped until you look at MOVE AGAIN.
   Use `--movement dwell` for the previous destination-based mode.
-- **Pick up / let go anywhere:** the fingertips start and travel about 50 mm (5 cm) above the table,
+- **Pick up / let go anywhere:** the fingertips start and travel about 100 mm (10 cm) above the table,
   according to the robot model. Blink twice quickly, look at PICK UP for 0.65 s, or click it: the arm
-  lowers to 20 mm, commands the gripper fully closed, waits one second for closure, then lifts back to
+  lowers to 40 mm (4 cm), commands the gripper fully closed, waits one second for closure, then lifts back to
   its travel height. It stays closed even if the joint-position estimate misses a small object.
   Move to any desired position, then blink twice or use LET GO to open there without lowering.
   Closed fingers do not prove an object was captured; session logs record the estimate separately.
@@ -92,8 +92,10 @@ uses the head for the rough spot and the eyes to fine-tune. Not yet measured on 
 - **Losing the eyes** (looking away, closing them, the face out of view) never starts anything.
 - **Helper keys:** Esc closes, C calibrates again, Space pauses, V hides/shows the face picture. Options:
   `--pointer head|eyes|both`, `--dwell 2`,
-  `--dot-seconds 3`, `--quiet` (no voice), `--reuse` (skip calibration), `--windowed`, `--grab-mm 20`
-  (pickup fingertip height above the table in mm; default and minimum 20).
+  `--dot-seconds 3`, `--quiet` (no voice), `--reuse` (skip calibration), `--windowed`, `--grab-mm 40`
+  (pick-up fingertip height above the table in mm; default 40, never below 30), `--travel-mm 100` (start-up
+  and moving height; default 100). Heights come from the robot model, which assumes the arm's base sits
+  directly on the table: if it stands on a plate, put the plate's thickness in `MOUNT_HEIGHT` in `brain/arm.py`.
 - **Measuring:** every session is logged to `~/.eyereach/sessions/` (calibration time and error, error at each
   dot, every move, pick-up and let-go, and the time of each pick-and-place). Add `--person NAME`, and for the
   error in degrees `--screen-cm` (width of the picture on the screen) and `--distance-cm` (eyes to screen).

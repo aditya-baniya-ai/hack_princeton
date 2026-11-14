@@ -196,7 +196,7 @@ class GrabHeightTest(unittest.TestCase):
         robot.grab = lambda height: heights.append(height) or False
         ctl.blink(time.monotonic())
         self.assertEqual(heights, [eye_control.GRAB_MM])
-        self.assertGreaterEqual(eye_control.GuidedControl(robot, grab_mm=5).grab_mm, 20.0)
+        self.assertGreaterEqual(eye_control.GuidedControl(robot, grab_mm=5).grab_mm, 30.0)
 
 
 class RestingEyesTest(unittest.TestCase):
