@@ -28,6 +28,7 @@ import numpy as np
 
 from eyereach import eye_control
 from eyereach.session_log import SessionLog
+from eyereach.voice_commands import VoiceInput, MODEL
 from eyereach.gaze_webcam import Camera, GazeMap, IrisGaze, OneEuro, camera_view, in_view
 
 W, H = 1280, 720                                # the picture size; set_size() changes it to the screen's
@@ -187,13 +188,17 @@ def draw(ctl, point, tracking, paused, fps, face=None):
     canvas = blank()
     if paused:
         centered(canvas, "Paused by the helper.", W // 2, 0.09 * H, 1.1, GOLD, 2)
-    elif not tracking:
+    elif not tracking and ctl.control_mode == "vision":
         centered(canvas, "I can't see your face. Please look at the screen.", W // 2, 0.09 * H, 1.1, RED, 2)
     else:
         centered(canvas, ctl.instruction(), W // 2, 0.09 * H, 1.1, GOLD, 2)
     robot = ctl.robot
     text(canvas, f"{robot.name}  |  {fps:.0f} fps   |  helper keys: Esc quit, C fix aim, Space pause, V face picture",
          0.01 * W, 0.025 * H, 0.4)
+
+    mode = "VOICE" if ctl.control_mode == "voice" else "VISION"
+    status = getattr(ctl, "microphone_status", "Voice input off")
+    centered(canvas, f"{mode}  |  {status}", W // 2, 0.135 * H, 0.55, CYAN)
 
     # the table map
     left, top, right, bottom = PLAY
@@ -230,7 +235,7 @@ def draw(ctl, point, tracking, paused, fps, face=None):
         corner = (int(0.025 * W), int(0.25 * H))
         paste(canvas, view, *corner)
         centered(canvas, "YOU", corner[0] + view.shape[1] // 2, corner[1] - scale(18), 0.8, WHITE, 2)
-        centered(canvas, "Point to move", corner[0] + view.shape[1] // 2,
+        centered(canvas, "Say Robot move left" if ctl.control_mode == "voice" else "Point to move", corner[0] + view.shape[1] // 2,
                  corner[1] + view.shape[0] + scale(35), 0.65, GOLD, 2)
         if nose is not None and point is not None and not paused:
             draw_ray(canvas, (corner[0] + nose[0], corner[1] + nose[1]), point, time.monotonic())
@@ -241,6 +246,9 @@ def draw(ctl, point, tracking, paused, fps, face=None):
         cv2.circle(canvas, p, int(scale(9)), GOLD, -1, cv2.LINE_AA)
         if ctl.movement == "dwell" and ctl.looking is not None and ctl.looking[0] == "map":
             cv2.ellipse(canvas, p, (ring, ring), 0, -90, -90 + 360 * ctl.progress, GREEN, 3, cv2.LINE_AA)
+    heard = getattr(ctl, "heard_command", "")
+    if heard:
+        centered(canvas, "Heard: " + heard, W // 2, 0.985 * H, 0.5, WHITE)
     return canvas
 
 
@@ -434,6 +442,12 @@ def main():
                         help="follow the pointer in real time (default), or dwell to choose destinations")
     parser.add_argument("--dot-seconds", type=float, default=DOT_SECONDS,
                         help=f"seconds of looking at each calibration dot (default {DOT_SECONDS})")
+    parser.add_argument("--voice", dest="voice", action="store_true", help="enable offline microphone commands")
+    parser.add_argument("--no-voice", dest="voice", action="store_false", help="disable microphone input")
+    parser.set_defaults(voice=False)
+    parser.add_argument("--voice-model", type=Path, default=MODEL, help="local Vosk model folder")
+    parser.add_argument("--microphone", help="input device index or name (default: system input)")
+    parser.add_argument("--list-microphones", action="store_true", help="list input devices and exit")
     parser.add_argument("--quiet", action="store_true", help="no voice")
     parser.add_argument("--grab-mm", type=float, default=eye_control.GRAB_MM,
                         help=f"fingertips this high above the table when picking up (default {eye_control.GRAB_MM:.0f}, "
@@ -448,10 +462,14 @@ def main():
     parser.add_argument("--fullscreen", action="store_true", help=argparse.SUPPRESS)   # the default now
     args, ros_args = parser.parse_known_args()
 
+    if args.list_microphones:
+        import sounddevice as sd
+        print(sd.query_devices())
+        return
     size = None if args.windowed else screen_size()
     if size:
         set_size(*size)
-    camera, gaze, voice = Camera(args.camera), IrisGaze(args.pointer), Voice(on=not args.quiet)
+    camera, gaze, voice = Camera(args.camera), IrisGaze(args.pointer), Voice(on=not args.quiet and not args.voice)
     cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL | cv2.WINDOW_FREERATIO)
     cv2.resizeWindow(WINDOW, W, H)
     if not args.windowed:
@@ -464,7 +482,7 @@ def main():
         cv2.resizeWindow(WINDOW, W, H)
         cv2.setWindowProperty(WINDOW, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
     show = lambda canvas: cv2.imshow(WINDOW, canvas)       # noqa: E731
-    robot = None
+    robot, listener = None, None
     log = SessionLog(args.person, W, args.screen_cm, args.distance_cm, "real" if args.real else "pretend")
     log.event("pointer", mode=args.pointer)
     print(f"Logging this session to {log.path}")
@@ -486,6 +504,10 @@ def main():
         if not args.real:
             robot.held = True        # the pretend arm: every pick-up holds something
         ctl = eye_control.GuidedControl(robot, look=args.dwell, grab_mm=args.grab_mm, movement=args.movement)
+        if args.voice:
+            device = int(args.microphone) if args.microphone and args.microphone.isdigit() else args.microphone
+            listener = VoiceInput(args.voice_model, device).start()
+        microphone_failed = False
         clicks = []
 
         def mouse(event, x, y, flags, param):
@@ -515,6 +537,33 @@ def main():
                        float(np.max(np.abs(pose - last_pose))) / max(now - last, 1e-3))   # degrees per second
             last_pose = pose
             double = blinks.update(gaze.opening, now, still=turning < STILL_DEG_S) and not paused
+            voice_acted = False
+            if listener:
+                ctl.voice_available = listener.status == "Listening" and not listener.error
+                ctl.microphone_status = listener.error or listener.status
+                if listener.error and not microphone_failed:
+                    ctl.press("stop", now)
+                    microphone_failed = True
+                    log.event("voice unavailable", message=listener.error)
+                events = listener.poll()
+                # STOP wins over every other recognized action in this batch.
+                if any(event.action == "stop" for event in events):
+                    ctl.voice("stop", now)
+                    ctl.heard_command = "stop - accepted"
+                    voice_acted = True
+                    clicks.clear()
+                    double = False
+                elif not paused and not listener.error:
+                    for event in events:
+                        accepted = ctl.voice(event.action, now, event.started, event.heard)
+                        ctl.heard_command = event.text + (" - accepted" if accepted else " - ignored")
+                        log.event("voice command", text=event.text, accepted=accepted)
+                        if accepted:
+                            voice_acted = True
+                            clicks.clear()
+                            double = False
+                            break  # never execute a batch of old commands
+
             if clicks:
                 name = clicks.pop(0)
                 clicks.clear()
@@ -522,8 +571,8 @@ def main():
                     ctl.press(name, now, how="click")
                     ctl.dwell = eye_control.Dwell(args.dwell)
                     double = False
-            ctl.step(None if paused or not tracking else looking_at(ctl, point), now, double,
-                     suspended=paused or not tracking)
+            ctl.step(None if paused or not tracking or voice_acted else looking_at(ctl, point), now, double,
+                     suspended=paused or (ctl.control_mode == "vision" and not tracking))
             for name, details in ctl.events:
                 log.event(name, **details)
             ctl.events = []
@@ -543,9 +592,12 @@ def main():
                 break
             if key == ord(" "):
                 paused = not paused
+                if paused:
+                    ctl.press("stop", now)
             elif key in (ord("v"), ord("V")):
                 view_on = not view_on
             if key in (ord("c"), ord("C")) or ctl.wants_calibration:
+                ctl.press("stop", now)
                 ctl.step(None, suspended=True)
                 blinks = eye_control.DoubleBlink()
                 ctl.wants_calibration = False
@@ -554,10 +606,15 @@ def main():
                     break
                 gmap = done[0]
                 gmap.save(saved)
+                ctl.accept_after = time.monotonic()
+                if listener:
+                    listener.poll()
                 smooth = OneEuro(still_hz=1.2, speed_up=0.004)
     except KeyboardInterrupt:
         pass
     finally:
+        if listener:
+            listener.close()
         log.close()
         cv2.destroyAllWindows()
         gaze.close()

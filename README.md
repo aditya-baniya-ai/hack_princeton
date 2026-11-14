@@ -32,6 +32,14 @@ Planned order: the real-arm eye control first, then Nova, then deepagents, then 
 ones are dropped, and nothing in the table above is claimed as working until its status says so. Further ahead:
 HoloLens 2 gaze input, so the user looks at real objects instead of a screen map.
 
+## Voice and vision test branch
+
+The `test/voice-vision-control` branch adds offline microphone commands, gaze-based
+mode switching, bounded spoken moves, and interruptible pickup with robot feedback.
+See [Jetson voice setup and commands](docs/jetson-voice.md) for installation and testing.
+Use `bash launch/setup_voice.sh` once, then `launch/eyereach.sh --no-arm --voice`.
+The launcher enables voice by default on this branch; `--no-voice` keeps vision only.
+
 ## How it works
 
 ```
@@ -51,7 +59,7 @@ OpenCR (usb_to_dxl)        passes commands to the servos, which report their ang
 ```
 
 How the control behaves. It is made for someone who can't use their arms: after a helper starts it, nothing
-needs a keyboard, and the screen (and a voice, through `spd-say`) always says what to do next.
+needs a keyboard, and the screen always says what to do next. With microphone commands off, `spd-say` can also speak prompts.
 
 ### Known problem: pointing with the eyes alone is jumpy
 
@@ -78,8 +86,7 @@ uses the head for the rough spot and the eyes to fine-tune. Not yet measured on 
   A larger mirrored face panel stays to the left of the map, and one aim line connects the nose to the
   calibrated pointer. The arm keeps its limits of 60 mm/s (40 mm/s while carrying); the pointer uses
   responsive adaptive smoothing. Looking at the face panel or buttons stops live following.
-  Closing the eyes, losing tracking, or pausing stops new movement commands. An in-progress pickup/release
-  finishes its existing sequence. STOP stays stopped until you look at MOVE AGAIN.
+  Closing the eyes, losing tracking, or pausing stops new movement commands. Pickup/release uses robot feedback; STOP interrupts the sequence and holds the arm. STOP stays stopped until you look at MOVE AGAIN.
   Use `--movement dwell` for the previous destination-based mode.
 - **Pick up / let go anywhere:** the fingertips start and travel about 120 mm (12 cm) above the table,
   according to the robot model. Blink twice quickly, look at PICK UP for 0.65 s, or click it: the arm
@@ -92,7 +99,7 @@ uses the head for the rough spot and the eyes to fine-tune. Not yet measured on 
   to tell whether something was caught, so it is only written to the session log.) A double blink only counts
   while the head is holding still (turning
   or nodding changes how open the eyes look) and not in the first 3 s after the face appears.
-- **Buttons:** PICK UP / LET GO, STOP / MOVE AGAIN, and FIX MY AIM. No fixed HOME or DROP-OFF
+- **Buttons:** PICK UP / LET GO, STOP / MOVE AGAIN, and FIX MY AIM. USE VOICE / USE VISION switches movement input hands-free. No fixed HOME or DROP-OFF
   buttons or map boxes. Buttons support gaze dwell (0.65 s by default, set with `--dwell`) and mouse clicks.
 - **Losing the eyes** (looking away, closing them, the face out of view) never starts anything.
 - **Helper keys:** Esc closes, C calibrates again, Space pauses, V hides/shows the face picture. Options:

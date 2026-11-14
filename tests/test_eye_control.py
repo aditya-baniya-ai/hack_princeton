@@ -118,9 +118,9 @@ class GuidedControlTest(unittest.TestCase):
 
     def test_greyed_out_buttons_do_nothing(self):
         robot, ctl = guided()
-        self.assertFalse(ctl.can("stop"))                        # not moving
+        self.assertFalse(ctl.can("voice"))                       # microphone not available
         for _ in range(30):
-            ctl.step(("button", "stop"))
+            ctl.step(("button", "voice"))
             time.sleep(0.02)
         self.assertEqual(ctl.phase, "waiting")
 
@@ -196,7 +196,7 @@ class FreePlacementTest(unittest.TestCase):
 
     def test_no_fixed_home_or_dropoff_controls(self):
         robot, ctl = guided()
-        self.assertEqual([name for name, _ in ctl.buttons()], ["pick up", "stop", "aim"])
+        self.assertEqual([name for name, _ in ctl.buttons()], ["pick up", "stop", "voice", "aim"])
         for name in ("home", "dropoff"):
             self.assertFalse(ctl.can(name))
             ctl.press(name, time.monotonic())
