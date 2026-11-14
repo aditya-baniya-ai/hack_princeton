@@ -3,7 +3,10 @@ Fix a joint that reads a whole turn off, like the base saying 353° when it face
 (it's really -7°). Runs before the arm starts (eyereach.sh does it), so the "outside its safe
 range" check sees the real angle.
 
-For each arm servo (IDs 11-14, not the gripper) it reads the angle. Only when it is more
+It also checks the gripper (ID 15): if its reading is a whole turn off, it restarts that
+servo, which resets the reading (see check_gripper); otherwise "open" drives it closed.
+
+For each arm servo (IDs 11-14) it reads the angle. Only when it is more
 than half a turn from 0 does it change the servo's Homing Offset by whole turns (4096
 steps = 360°), so 353° becomes -7°. Whole turns never change where the joint really
 points, only the number it reports. The servo keeps the new offset (it is stored in
@@ -90,6 +93,33 @@ class Bus:
         self.send(servo, 0x03, struct.pack("<H", address) + struct.pack(fmt, value))
 
 
+GRIPPER = 15
+GRIPPER_RANGE = (857, 2848)   # the gripper's counts: open is about 1057-1072, closed about 2648-2682,
+                              # with some room. ROS (open_manipulator_x_system.ros2_control.xacro,
+                              # revolute_min/max) expects exactly this window.
+
+
+def check_gripper(bus, check_only):
+    """The gripper servo counts whole turns, and it can pick up an extra one (it read 5168 open
+    instead of 1072): ROS's "open" then drives it closed and it stays closed. Restarting the servo
+    resets the count to its real position. Nothing moves."""
+    position = bus.read32(GRIPPER, PRESENT_POSITION)
+    if GRIPPER_RANGE[0] <= position <= GRIPPER_RANGE[1]:
+        if check_only:
+            print(f"Gripper: {position}  (fine)")
+        return
+    print(f"Gripper reads {position}, outside its real range {GRIPPER_RANGE[0]}-{GRIPPER_RANGE[1]} "
+          "(a whole turn off), so 'open' wouldn't open it.")
+    if check_only:
+        return
+    bus.send(GRIPPER, 0x08, b"")                # Reboot: resets the turn count; torque stays off
+    time.sleep(1.0)
+    now = bus.read32(GRIPPER, PRESENT_POSITION)
+    fine = GRIPPER_RANGE[0] <= now <= GRIPPER_RANGE[1]
+    print(f"  Restarted the gripper servo: it now reads {now}" +
+          ("  (fixed)." if fine else ". Still off: turn the 12 V off and on again."))
+
+
 def turns_off(position):
     """How many whole turns the reading is away from the -180°..+180° window."""
     return round((position - ZERO) / TURN)
@@ -114,6 +144,10 @@ def main():
         print(f"(Can't check the joints' turns: {error})")
         return 0
     try:
+        try:
+            check_gripper(bus, args.check)
+        except Exception as error:
+            print(f"(Couldn't check the gripper: {error})")
         for servo in ARM_IDS:
             position = bus.read32(servo, PRESENT_POSITION)
             turns = turns_off(position)

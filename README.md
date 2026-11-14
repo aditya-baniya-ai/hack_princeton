@@ -335,6 +335,11 @@ Try the simulation first. On the real arm try `go 200 0 100` first and measure w
 
 ## Problems
 
+- **The gripper stays closed and never opens (every command "accepted"):** the gripper servo counts whole turns
+  and had picked up an extra one (it read 5168 with the fingers open; ROS expects about 1057 open and 2648 closed),
+  so "open" drove it closed against its stop. Restarting the servo resets the count. `launch/fix_turns.py` (run by
+  `launch/eyereach.sh` before every real-arm start) now checks this and restarts the gripper servo if needed;
+  `python3 launch/fix_turns.py --check` shows the reading. If it stays off, turn the 12 V off and on.
 - **"could not connect to display" / "Qt platform plugin xcb" and the app aborts:** it was started from a terminal
   with no screen (an SSH terminal has an empty `DISPLAY`). `launch/eyereach.sh` now uses the desktop you're
   logged into (the Jetson's monitor or Remote Desktop) and refuses to start the arm if there is none. To choose
