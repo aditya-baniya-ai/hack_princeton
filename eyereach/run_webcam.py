@@ -565,7 +565,7 @@ def main():
         if robot is not None:
             if robot.closed:
                 robot.open_here()
-            robot.stop()
+            robot.stop()                 # the real arm opens the gripper and waits for it first
 
 
 if __name__ == "__main__":

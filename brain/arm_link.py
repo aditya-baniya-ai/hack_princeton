@@ -34,6 +34,7 @@ WHACK_TIME = 0.30        # seconds down, and the same back up
 GRAB_HEIGHT = 15.0       # mm: fingertips this high to grab a ball off the table
 RELEASE_HEIGHT = 40.0    # mm: fingertips this high to let go of a ball
 GRIPPER_WAIT = 1.0       # seconds for the gripper to close or open
+OPEN_ENOUGH = 0.012      # gripper position: at least this = open (fully open is 0.019, closed -0.01)
 HOLDING = -0.006         # gripper position: stopped above this when closing = a ball is
                          # in it (empty, it closes all the way to -0.01)
 LAG = 0.12               # seconds the pretend arm trails behind (like the real one)
@@ -284,20 +285,39 @@ class RealArm(ArmBase):
         self.node = Gesturer()
 
     def start(self):
-        """Check the arm, then move to the middle of the play area.
-        Returns None, or why it can't start."""
+        """Check the arm, open the gripper (and wait until it reports open), then move to the
+        middle of the play area. Returns None, or why it can't start."""
         from gestures import connect
         if not connect(self.node):
             return "the arm isn't ready (see the messages above)"
+        if not self.node.gripper.wait_for_server(timeout_sec=3.0):
+            return "the gripper controller isn't running"
+        if self.open_and_wait():
+            print(f"Gripper open ({self.gripper_position():+.4f}).")
+        else:
+            print(f"Warning: the gripper didn't report open (position {self.gripper_position()}); "
+                  "check it isn't blocked or overloaded (README step 5c).")
         goal = self.hover_joints(*area_to_point(0.5, 0.5))
         why = "the middle of the play area can't be reached" if goal is None \
             else arm.move_joints_safely(self.node, goal)
         if why:
             return why
         self.command = list(goal)
-        self.node.gripper.wait_for_server(timeout_sec=2.0)
-        self.set_gripper(False)
         return None
+
+    def gripper_position(self):
+        return self.node.joints.get("gripper_left_joint")
+
+    def open_and_wait(self, seconds=3.0):
+        """Open the gripper and wait until /joint_states shows it open. True if it did."""
+        self.set_gripper(False)
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            self.rclpy.spin_once(self.node, timeout_sec=0.05)
+            position = self.gripper_position()
+            if position is not None and position >= OPEN_ENOUGH:
+                return True
+        return False
 
     def set_gripper(self, closed):
         """Open or close the gripper without waiting for it."""
@@ -334,8 +354,12 @@ class RealArm(ArmBase):
         return [self.node.joints[j] for j in JOINTS]
 
     def stop(self):
-        """Back to the home pose, then disconnect."""
+        """Open the gripper (waiting for it, so the next start finds it open), back to the home
+        pose, then disconnect."""
         try:
+            if self.command is not None and not self.open_and_wait():
+                print(f"Warning: the gripper didn't report open before stopping "
+                      f"(position {self.gripper_position()}).")
             if self.command is not None:
                 arm.move_joints_safely(self.node, [self.joints()[0], 0.0, 0.0, 0.0])
         finally:

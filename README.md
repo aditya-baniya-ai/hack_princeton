@@ -85,7 +85,8 @@ uses the head for the rough spot and the eyes to fine-tune. Not yet measured on 
   according to the robot model. Blink twice quickly, look at PICK UP for 0.65 s, or click it: the arm
   opens the gripper and waits one second, lowers to 50 mm (5 cm) with it open, closes it fully, waits one
   second for closure, then lifts back to
-  its travel height. **The gripper is open the rest of the time:** if the fingers closed all the way (nothing
+  its travel height. **The gripper is open the rest of the time:** at start-up it opens first (and waits until it
+  reports open) before the arm moves, and when the app closes it opens and waits again before the arm stops; if the fingers closed all the way (nothing
   there), it opens again at once and says so; only when it stops partway on an object does it stay closed,
   until the next double blink or LET GO opens it where it is. Very thin objects (under about 8 mm) close all
   the way too, so they count as nothing. A double blink only counts while the head is holding still (turning
