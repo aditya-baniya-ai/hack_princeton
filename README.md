@@ -322,6 +322,10 @@ Try the simulation first. On the real arm try `go 200 0 100` first and measure w
 
 ## Problems
 
+- **"could not connect to display" / "Qt platform plugin xcb" and the app aborts:** it was started from a terminal
+  with no screen (an SSH terminal has an empty `DISPLAY`). `launch/eyereach.sh` now uses the desktop you're
+  logged into (the Jetson's monitor or Remote Desktop) and refuses to start the arm if there is none. To choose
+  one yourself: `DISPLAY=:10 launch/eyereach.sh` (`ls /tmp/.X11-unix` lists them; X10 is usually Remote Desktop).
 - **Permission denied on /dev/ttyACM0:** your user isn't in the `dialout` group. Run the `usermod` line in step 4, then
   log out and back in.
 - **The arm doesn't move after uploading usb_to_dxl:** normal. Start it with ROS 2 (see "Run it with the arm").

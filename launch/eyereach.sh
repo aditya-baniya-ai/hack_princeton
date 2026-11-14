@@ -27,6 +27,26 @@ PYTHON=python3
 [ -x "$HOME/eyereach_venv/bin/python" ] && PYTHON="$HOME/eyereach_venv/bin/python"
 cd "$REPO"
 
+# The app needs a screen. In an SSH terminal DISPLAY is empty, so use a desktop this user is logged
+# into (like a Remote Desktop session). Checked before the arm starts, so a missing screen never
+# starts and then drops the arm.
+if [ -z "$DISPLAY" ]; then
+  for socket in /tmp/.X11-unix/X*; do
+    [ -e "$socket" ] || continue
+    if DISPLAY=":${socket##*/X}" xdpyinfo > /dev/null 2>&1; then
+      export DISPLAY=":${socket##*/X}"
+      echo "Showing EyeReach on display $DISPLAY (the desktop you're logged into)."
+      break
+    fi
+  done
+fi
+if ! xdpyinfo > /dev/null 2>&1; then
+  echo "No screen to show EyeReach on (DISPLAY='$DISPLAY'). Nothing was started."
+  echo "Log in to the Jetson's desktop (on its monitor or by Remote Desktop), or run this from a"
+  echo "terminal on that desktop, or set it yourself, e.g.:  DISPLAY=:10 $0 $*"
+  exit 1
+fi
+
 if [ "$NO_ARM" = true ]; then
   exec "$PYTHON" -m eyereach.run_webcam "${APP_ARGS[@]}"
 fi
