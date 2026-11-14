@@ -113,6 +113,14 @@ and keep still for about two seconds; that is your centre.
 | Come back to the centre, or lose the face | stops |
 | **Nod** (a quick dip and back) | picks up where it is; the next nod lets go there |
 
+- **The nose guides the arm.** The point between your eyes is the reference, and the arm follows how far your nose
+  tip moves from where it sits when you look straight (in eye-widths, `gaze_webcam.nose_offset`). Measured that way,
+  looking straight reads straight wherever your face is in the camera's picture and whatever the camera's angle; the
+  earlier 3D head angle read 41 deg "straight" with the webcam off to the side and drifted, so the arm moved right
+  while you looked straight. On the screen: a cross between the eyes, a dot on the nose tip and a green circle where
+  the nose sits when straight; under the face, a big **nose joystick** (the dot is where your nose points, the green
+  ring is the still zone). The centre is taken while you look at your own face in the middle of the screen, only once
+  your head has been still for a second.
 - **Nothing moves by accident:** an 8° dead zone around the centre; a tilt must be held 0.6 s before the arm moves (a
   nod is quicker, so a nod never moves it); a nod must dip at least 10° and come back within 0.9 s with the head not
   turned sideways, and another nod only counts 1.2 s later. A slow tilt down is a move, not a nod.

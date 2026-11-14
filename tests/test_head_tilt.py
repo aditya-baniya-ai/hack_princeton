@@ -204,3 +204,42 @@ class ScreenAgreesWithTheHeadTest(unittest.TestCase):
             self.assertAlmostEqual(back[1], 0.8, places=2)                # (whole pixels)
         finally:
             run_webcam.MAP["away_up"] = False
+
+
+class NoseGuidesTest(unittest.TestCase):
+    """The nose-between-the-eyes reading: right directions, and the same wherever the face is in the picture."""
+
+    @staticmethod
+    def face(yaw=0.0, pitch=0.0, x=300.0):
+        import math
+        import numpy as np
+        from eyereach.gaze_webcam import LEFT, NOSE, RIGHT
+        pts = np.zeros((478, 3))
+        pts[LEFT["outer"]], pts[RIGHT["outer"]], pts[NOSE] = (45, 0, 0), (-45, 0, 0), (0, 55, -45)
+        a, b = math.radians(yaw), math.radians(pitch)
+        ry = np.array([[math.cos(a), 0, -math.sin(a)], [0, 1, 0], [math.sin(a), 0, math.cos(a)]])
+        rx = np.array([[1, 0, 0], [0, math.cos(b), math.sin(b)], [0, -math.sin(b), math.cos(b)]])
+        out = pts @ (rx @ ry).T
+        out[:, 0] += x
+        out[:, 1] += 200
+        return out[:, :2]
+
+    def angles(self, **kw):
+        from eyereach.gaze_webcam import nose_offset
+        from eyereach.head_tilt import nose_angles
+        c, a = nose_angles(nose_offset(self.face())), nose_angles(nose_offset(self.face(**kw)))
+        return a[0] - c[0], a[1] - c[1]
+
+    def test_straight_reads_zero_anywhere_in_the_picture(self):
+        for x in (80.0, 300.0, 560.0):
+            yaw, pitch = self.angles(x=x)
+            self.assertAlmostEqual(yaw, 0.0, delta=0.5)
+            self.assertAlmostEqual(pitch, 0.0, delta=0.5)
+
+    def test_turns_and_nods_read_the_right_way(self):
+        yaw, pitch = self.angles(yaw=20.0)                    # turned to the person's left
+        self.assertAlmostEqual(yaw, 20.0, delta=3.0)
+        self.assertLess(abs(pitch), 2.0)                      # a turn doesn't leak into up/down
+        self.assertLess(self.angles(yaw=-20.0)[0], -17.0)     # right
+        self.assertGreater(self.angles(pitch=15.0)[1], 10.0)  # up
+        self.assertLess(self.angles(pitch=-15.0)[1], -10.0)   # down

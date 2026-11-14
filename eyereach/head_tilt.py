@@ -2,6 +2,11 @@
 
 No screen calibration: only "which way is the face turned, compared with when you looked straight ahead".
 
+How the turn is measured: the nose guides it. The point between the eyes is the reference; turning moves the nose
+tip sideways from it and looking up or down moves it up or down (gaze_webcam.nose_offset, in eye-widths). That
+2D measure stays steady wherever the face is in the picture and whatever the camera's angle (the 3D head angle
+read 41 deg "straight" with the webcam off to the side, and drifted). nose_angles() turns it into degrees.
+
     python3 -m eyereach.head_tilt          check it with your own head (no arm): prints each move and nod
 
     look left / right, or tilt the head left / right (ear toward the shoulder)
@@ -33,6 +38,8 @@ NOD_MAX = 0.9        # ... within this many seconds,
 NOD_SIDE = 10.0      # with the head turned less than this sideways
 NOD_GAP = 1.2        # seconds after a nod before another one counts
 FLIP_VERTICAL = False
+NOSE_DEPTH = 0.5     # how far the nose tip stands out from the eyes, in eye-widths: a turn of a degrees moves it
+                     # about NOSE_DEPTH * sin(a) eye-widths across (so 20 deg is about 0.17)
 GRACE = 0.25         # seconds a lost face keeps the last direction (MediaPipe drops a frame now and then)
 
 
@@ -46,6 +53,19 @@ class Tilt:
     yaw: float = 0.0             # degrees from the centre (person's left is positive)
     pitch: float = 0.0           # degrees from the centre (up is positive)
     roll: float = 0.0            # degrees from the centre (tilted to the person's right is positive)
+
+
+def nose_angles(nose, roll_rad=0.0):
+    """(sideways, down) from gaze_webcam.nose_offset -> (yaw, pitch, roll) in degrees for HeadTilt.update:
+    yaw > 0 is the person's left, pitch > 0 is up. Linear (offset / NOSE_DEPTH radians): only the change from
+    the centre counts, so the nose's resting place below the eyes doesn't matter."""
+    if nose is None:
+        return None
+    side, down = nose
+    yaw = side / NOSE_DEPTH
+    # turning narrows the eye width the camera sees, which makes the nose look further down: take that back out
+    down *= math.cos(max(-1.2, min(1.2, yaw)))
+    return math.degrees(yaw), -math.degrees(down / NOSE_DEPTH), math.degrees(roll_rad)
 
 
 class HeadTilt:
@@ -136,7 +156,8 @@ def live(seconds=60.0, camera="/dev/video0"):
     while len(poses) < 30 and time.monotonic() - start < 15:
         gaze.features(cam.read())
         if gaze.pose is not None:
-            poses.append(np.degrees(gaze.pose[:3]))
+            if gaze.nose is not None and gaze.pose is not None:
+                poses.append(nose_angles(gaze.nose, gaze.pose[2]))
     if len(poses) < 30:
         print("No face found: move the camera so the whole face is in the picture.")
         return
@@ -147,7 +168,7 @@ def live(seconds=60.0, camera="/dev/video0"):
         while time.monotonic() < end:
             gaze.features(cam.read())
             now = time.monotonic()
-            t = head.update(None if gaze.pose is None else tuple(np.degrees(gaze.pose[:3])), now)
+            t = head.update(None if gaze.nose is None or gaze.pose is None else nose_angles(gaze.nose, gaze.pose[2]), now)
             line = f"yaw {t.yaw:+5.1f}  pitch {t.pitch:+5.1f}  roll {t.roll:+5.1f}   {t.label:20s}" + ("   NOD -> pick up / let go" if t.nod else "")
             if t.nod or t.label != last:
                 print(line, flush=True)
