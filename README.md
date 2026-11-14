@@ -90,11 +90,31 @@ The main features (details in the sections below):
   count, which had made "open" drive it closed.
 - **Session log and measurement tool:** every calibration, move and pick-up in `~/.eyereach/sessions/`;
   `tools/measure.py` for accuracy (degrees) and grab success.
+- **Test everything in one command:** `launch/test_all.sh` (16 checks, never moves the real arm).
 - **One command:** `launch/eyereach.sh` loads `.env`, finds the screen, checks the gripper and joints, starts the arm
   and the app, and adds voice commands when installed. `launch/setup_jetson.sh` sets up a Jetson in one go.
 - **Voice:** offline commands (Vosk), Amazon Nova 2 Sonic conversation (`launch/talk.sh`), and the speaker's
   microphone used first with the webcam's as fallback.
 - **Amazon Nova 2 Lite** object finding and the **LangChain deepagents** task agent (not yet driving the real arm).
+
+## Test everything (one command)
+
+```bash
+launch/test_all.sh              # everything, about 2 minutes (2 small AWS calls)
+launch/test_all.sh --offline    # no AWS calls      --no-sim: skip the simulation      --no-sound: no beep or voice
+```
+
+It **never moves the real arm** and ends with a PASS / FAIL / SKIP table (exit code 1 if anything failed):
+1. **Environments and keys:** both Python environments; `.env` loads the AWS keys (values never printed) and is git-ignored.
+2. **Unit tests** in both environments, and the robot maths (`brain/arm.py test`).
+3. **Devices:** a webcam frame, the OpenCR, the servos and the gripper's turn count (read only), which microphone is
+   picked and that it records, and a beep on the speaker.
+4. **The arm's motion on the ROS simulation** (`tools/sim_check.py`, fake hardware, same code as the real arm): the
+   gripper starts closed and start-up opens it; a double blink goes down open to the pick-up height, closes, lifts and
+   holds; the next double blink opens it; it is open after stopping.
+5. **Amazon on Bedrock:** one Nova 2 Lite call on the webcam photo, and one Nova 2 Sonic reply played on the speaker.
+
+Then try the real arm (someone holds it): `launch/eyereach.sh`, and talk to it: `launch/talk.sh`.
 
 ## Offline voice commands
 
@@ -216,10 +236,12 @@ brain/         arm.py: the robot maths, plus commands to check it (test, where, 
                arm_link.py: the arm follows a point, grabs and releases (or a pretend arm)
 gestures/      gestures.py: the ROS 2 link that moves the joints
 launch/        eyereach.sh (one command: the arm and the app), talk.sh (Nova Sonic conversation),
+               test_all.sh (test everything without moving the real arm),
                setup_jetson.sh and setup_voice.sh (one-time setup), stop.sh (stop everything),
                fix_turns.py (joint and gripper turn checks before each start)
 firmware/      servo_check: an Arduino test that stands the arm up and waves
 tools/         measure.py: gaze accuracy on 9 test dots, and timed grab trials, into results/measurements.csv
+               sim_check.py: the whole pick-up on the ROS simulation (run by launch/test_all.sh)
 tests/         run with: python3 -m unittest discover -s tests
 dependencies.repos   the ROBOTIS code to download (setup step 5)
 ```
