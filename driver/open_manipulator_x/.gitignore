@@ -1,0 +1,19 @@
+# macOS
+.DS_Store
+
+# ROS 2 build output
+build/
+install/
+log/
+
+# Python
+__pycache__/
+
+# YOLO model files (downloaded automatically)
+*.pt
+
+# Game scores (local to each robot)
+game/leaderboard.json
+game/ball_leaderboard.json
+game/claw_leaderboard.json
+game/claw_setup.json
