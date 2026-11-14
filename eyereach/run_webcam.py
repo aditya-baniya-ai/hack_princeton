@@ -9,7 +9,7 @@ it is running; the screen (and a voice) always says what to do next.
    40 seconds). Your face is shown with a ray coming out of the nose, so you can see where you point.
 2. Point at the table map: the arm follows immediately, within its speed limits.
 3. Blink twice quickly to pick up where the arm is (or to let go when holding something).
-4. Look at a big button and keep looking (it fills up): PICK UP / LET GO, DROP-OFF, HOME, STOP, FIX MY AIM.
+4. Look at a big button and keep looking (it fills up): PICK UP / LET GO, STOP, FIX MY AIM.
 Looking away or closing the eyes never moves anything. Every session is logged (eyereach/session_log.py).
 
 Full screen by default (--windowed for a 1280 x 720 window).
@@ -200,11 +200,6 @@ def draw(ctl, point, tracking, paused, fps, face=None):
     centered(canvas, "near you", (left + right) // 2, top - 0.012 * H, 0.55)
     centered(canvas, "near the arm", (left + right) // 2, bottom + 0.035 * H, 0.55)
     ring = int(scale(26))
-    for spot, label, color in ((ctl.home, "home", DIM), (ctl.dropoff, "drop-off", PINK)):
-        c = to_screen(*spot)
-        half = int(scale(30))
-        cv2.rectangle(canvas, (c[0] - half, c[1] - half), (c[0] + half, c[1] + half), color, 1, cv2.LINE_AA)
-        centered(canvas, label, c[0], c[1] - half - scale(8), 0.5, color)
     if ctl.target is not None:                             # the chosen spot
         t = to_screen(*ctl.target)
         cv2.circle(canvas, t, ring, GREEN, 2, cv2.LINE_AA)
@@ -439,8 +434,6 @@ def main():
     parser.add_argument("--dot-seconds", type=float, default=DOT_SECONDS,
                         help=f"seconds of looking at each calibration dot (default {DOT_SECONDS})")
     parser.add_argument("--quiet", action="store_true", help="no voice")
-    parser.add_argument("--dropoff", type=float, nargs=2, metavar=("X", "Y"),
-                        help="drop-off tray position in mm from the arm base (x forward, y to the arm's left)")
     parser.add_argument("--grab-mm", type=float, default=eye_control.GRAB_MM,
                         help=f"fingertips this high above the table when picking up (default {eye_control.GRAB_MM:.0f}, "
                              "never below 20)")
@@ -481,14 +474,23 @@ def main():
             gmap = done[0]
             gmap.save(saved)
         robot = eye_control.arm_link.RealArm(ros_args=ros_args) if args.real else eye_control.arm_link.VirtualArm()
+        robot.hover = eye_control.HOVER_MM
         why = robot.start()
         if why:
             print(f"Can't start the arm: {why}")
             return
         if not args.real:
             robot.held = True        # the pretend arm: every pick-up holds something
-        dropoff = eye_control.DROPOFF if args.dropoff is None else eye_control.arm_link.point_to_area(*args.dropoff)
-        ctl = eye_control.GuidedControl(robot, look=args.dwell, dropoff=dropoff, grab_mm=args.grab_mm, movement=args.movement)
+        ctl = eye_control.GuidedControl(robot, look=args.dwell, grab_mm=args.grab_mm, movement=args.movement)
+        clicks = []
+
+        def mouse(event, x, y, flags, param):
+            if event == cv2.EVENT_LBUTTONDOWN:
+                hit = looking_at(ctl, (x, y))
+                if hit is not None and hit[0] == "button":
+                    clicks.append(hit[1])
+
+        cv2.setMouseCallback(WINDOW, mouse)
         blinks = eye_control.DoubleBlink()
         smooth, paused, last, lost_since = OneEuro(still_hz=1.2, speed_up=0.004), False, time.monotonic(), None
         view_on = True
@@ -505,6 +507,13 @@ def main():
             tracking = raw is not None and eyes_open
             now = time.monotonic()
             double = blinks.update(gaze.opening, now) and not paused
+            if clicks:
+                name = clicks.pop(0)
+                clicks.clear()
+                if not paused:
+                    ctl.press(name, now, how="click")
+                    ctl.dwell = eye_control.Dwell(args.dwell)
+                    double = False
             ctl.step(None if paused or not tracking else looking_at(ctl, point), now, double,
                      suspended=paused or not tracking)
             for name, details in ctl.events:

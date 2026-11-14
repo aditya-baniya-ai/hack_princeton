@@ -102,6 +102,7 @@ class GuidedControlTest(unittest.TestCase):
         self.assertEqual(keep_looking(ctl, None, "there"), "there")
         self.assertTrue(ctl.holding)
         self.assertEqual(ctl.buttons()[0][0], "let go")
+        ctl.step(("map", robot.gripper_area()[:2]))  # look away before pressing the changed button
         ctl.step(None)
         self.assertEqual(keep_looking(ctl, ("button", "let go"), "letting go"), "letting go")
         self.assertEqual(keep_looking(ctl, None, "waiting"), "waiting")
@@ -164,29 +165,28 @@ class DoubleBlinkTest(unittest.TestCase):
         self.assertEqual(eyes(b, [(OPEN, 2), (SHUT, 0.15), (None, 0.3), (SHUT, 0.15), (OPEN, 1)]), [])
 
 
-class SavedMovesTest(unittest.TestCase):
-    def test_blink_picks_up_and_drop_off_lets_go_there(self):
+class FreePlacementTest(unittest.TestCase):
+    def test_blink_pick_and_release_at_chosen_position(self):
         robot, ctl = guided()
-        robot.held = object()
-        ctl.step(None, double_blink=True)                        # blink twice: pick up here
+        ctl.step(None, double_blink=True)
         self.assertEqual(ctl.phase, "picking")
         self.assertEqual(keep_looking(ctl, None, "there"), "there")
-        self.assertTrue(ctl.holding)
-        self.assertEqual(keep_looking(ctl, ("button", "dropoff"), "moving"), "moving")
-        self.assertEqual(keep_looking(ctl, None, "waiting", seconds=40), "waiting")
-        self.assertFalse(ctl.holding)
-        u, v, _ = robot.gripper_area()
-        self.assertLess(math.dist((u, v), ctl.dropoff), 0.08)
-        names = [name for name, _ in ctl.events]
-        self.assertEqual(names[0], "pick")
-        self.assertIn("task done", names)
+        self.assertTrue(ctl.holding and robot.closed)  # an empty close stays closed too
+        ctl.go((0.6, 0.5), "look", time.monotonic())
+        self.assertEqual(keep_looking(ctl, None, "there"), "there")
+        before = robot.gripper_area()
+        ctl.step(None, double_blink=True)
+        self.assertEqual(keep_looking(ctl, None, "waiting"), "waiting")
+        self.assertFalse(ctl.holding or robot.closed)
+        self.assertLess(math.dist(before, robot.gripper_area()), 1.0)
 
-    def test_home_and_drop_off_only_when_they_make_sense(self):
+    def test_no_fixed_home_or_dropoff_controls(self):
         robot, ctl = guided()
-        self.assertFalse(ctl.can("dropoff"))                     # nothing to drop off
-        self.assertTrue(ctl.can("home"))
-        keep_looking(ctl, ("button", "home"), "moving")
-        self.assertEqual(ctl.target, ctl.home)
+        self.assertEqual([name for name, _ in ctl.buttons()], ["pick up", "stop", "aim"])
+        for name in ("home", "dropoff"):
+            self.assertFalse(ctl.can(name))
+            ctl.press(name, time.monotonic())
+        self.assertIsNone(ctl.target)
 
 
 class GrabHeightTest(unittest.TestCase):

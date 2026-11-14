@@ -33,7 +33,7 @@ CARRY_SPEED = 0.8        # rad/s: ... and the fastest any joint moves then
 WHACK_TIME = 0.30        # seconds down, and the same back up
 GRAB_HEIGHT = 15.0       # mm: fingertips this high to grab a ball off the table
 RELEASE_HEIGHT = 40.0    # mm: fingertips this high to let go of a ball
-GRIPPER_WAIT = 0.6       # seconds for the gripper to close or open
+GRIPPER_WAIT = 1.0       # seconds for the gripper to close or open
 HOLDING = -0.006         # gripper position: stopped above this when closing = a ball is
                          # in it (empty, it closes all the way to -0.01)
 LAG = 0.12               # seconds the pretend arm trails behind (like the real one)
@@ -165,15 +165,24 @@ class ArmBase:
         """Go down a little, open the gripper, come back up."""
         return self.down_and_up(height, closed=False)
 
+    def release_here(self):
+        """Open at the chosen position, without lowering or moving elsewhere."""
+        if self.busy() or self.command is None:
+            return False
+        self.open_here()
+        self.busy_until = time.monotonic() + GRIPPER_WAIT
+        return True
+
     def down_and_up(self, height, closed):
         if self.busy() or self.command is None:
             return False
-        x, y, _, _ = arm.forward(self.command)
+        up = list(self.joints())
+        x, y, _, _ = arm.forward(up)
         down, _ = arm.solve(x, y, height)
         if down is None:
             return False
         now = time.monotonic()
-        up = list(self.command)
+        self.command, self.aim = list(up), (x, y)
         # Long enough that no joint goes faster than the speed limit (further down = longer)
         move = max(0.45, max(abs(d - u) for d, u in zip(down, up)) / self.speed)
         self.send([down], [move])

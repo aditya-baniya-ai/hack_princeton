@@ -9,6 +9,7 @@ class LiveControlTest(unittest.TestCase):
     def setUp(self):
         self.robot = Mock()
         self.robot.busy.return_value = False
+        self.robot.closed = False
         self.robot.gripper_area.return_value = (0.5, 0.5, 60)
         self.ctl = GuidedControl(self.robot, movement="follow", look=0.65)
 
@@ -59,3 +60,56 @@ class LiveControlTest(unittest.TestCase):
         d.update(None, 3)
         d.update(button, 4)
         self.assertEqual(d.update(button, 4.66)[1], button)
+
+
+class PickupSequenceTest(unittest.TestCase):
+    def test_start_at_five_cm_and_lower_close_lift_in_order(self):
+        from eyereach import eye_control
+        from unittest.mock import patch
+        robot = eye_control.arm_link.VirtualArm()
+        robot.hover = eye_control.HOVER_MM
+        robot.start()
+        self.assertAlmostEqual(robot.gripper_area()[2], 50.0, places=4)
+        with patch.object(eye_control.arm_link.time, "monotonic", return_value=100.0):
+            self.assertTrue(robot.grab(eye_control.GRAB_MM))
+        down = robot.plan[0][1]
+        self.assertAlmostEqual(eye_control.arm_link.arm.forward(down)[2], 20.0, places=4)
+        self.assertFalse(robot.closed)
+        close_at, lift_at = [t for t, _ in robot.steps]
+        with patch.object(eye_control.arm_link.time, "monotonic", return_value=close_at):
+            robot.run_steps()
+        self.assertTrue(robot.closed)
+        self.assertGreaterEqual(lift_at - close_at, 1.0)
+        with patch.object(eye_control.arm_link.time, "monotonic", return_value=lift_at):
+            robot.run_steps()
+        self.assertAlmostEqual(eye_control.arm_link.arm.forward(robot.plan[0][1])[2], 50.0, places=4)
+
+    def test_small_object_is_not_automatically_released(self):
+        robot = Mock()
+        robot.closed = True
+        robot.holding.return_value = False
+        robot.busy.return_value = False
+        ctl = GuidedControl(robot, movement="follow")
+        ctl.phase = "picking"
+        ctl.step(None, now=1)
+        self.assertTrue(ctl.holding)
+        robot.open_here.assert_not_called()
+        ctl.blink(2)
+        robot.release_here.assert_called_once()
+
+
+class HandButtonLatchTest(unittest.TestCase):
+    def test_staying_on_pickup_does_not_activate_changed_release_button(self):
+        robot = Mock()
+        robot.closed = True
+        robot.busy.return_value = False
+        ctl = GuidedControl(robot, movement="follow", look=0.65)
+        ctl.press("pick up", 0)
+        ctl.step(("button", "pick up"), now=1)
+        ctl.step(("button", "let go"), now=2)
+        ctl.step(("button", "let go"), now=3)
+        robot.release_here.assert_not_called()
+        ctl.step(("map", (0.5, 0.5)), now=4)
+        ctl.step(("button", "let go"), now=5)
+        ctl.step(("button", "let go"), now=6)
+        robot.release_here.assert_called_once()

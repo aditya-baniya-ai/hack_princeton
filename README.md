@@ -81,18 +81,19 @@ uses the head for the rough spot and the eyes to fine-tune. Not yet measured on 
   Closing the eyes, losing tracking, or pausing stops new movement commands. An in-progress pickup/release
   finishes its existing sequence. STOP stays stopped until you look at MOVE AGAIN.
   Use `--movement dwell` for the previous destination-based mode.
-- **Pick up / let go:** blink twice quickly (both blinks within a second). It picks up where the arm is, or lets
-  go when it is holding something. Measured against the person's usual eye opening; one blink, slow blinks or
-  resting the eyes never count.
-- **Buttons** (look and keep looking until they fill): **PICK UP** / **LET GO** (the same as blinking twice, for
-  people who can't blink reliably), **DROP-OFF** (carry it to the tray and let go; the pink square, set with
-  `--dropoff X Y` in mm from the arm base), **HOME** (back to the middle), **STOP** (while moving), and
-  **FIX MY AIM** (calibrate again). Buttons need a 0.65 s dwell by default (`--dwell` changes it). Greyed-out buttons do nothing.
+- **Pick up / let go anywhere:** the fingertips start and travel about 50 mm (5 cm) above the table,
+  according to the robot model. Blink twice quickly, look at PICK UP for 0.65 s, or click it: the arm
+  lowers to 20 mm, commands the gripper fully closed, waits one second for closure, then lifts back to
+  its travel height. It stays closed even if the joint-position estimate misses a small object.
+  Move to any desired position, then blink twice or use LET GO to open there without lowering.
+  Closed fingers do not prove an object was captured; session logs record the estimate separately.
+- **Buttons:** PICK UP / LET GO, STOP / MOVE AGAIN, and FIX MY AIM. No fixed HOME or DROP-OFF
+  buttons or map boxes. Buttons support gaze dwell (0.65 s by default, set with `--dwell`) and mouse clicks.
 - **Losing the eyes** (looking away, closing them, the face out of view) never starts anything.
 - **Helper keys:** Esc closes, C calibrates again, Space pauses, V hides/shows the face picture. Options:
   `--pointer head|eyes|both`, `--dwell 2`,
-  `--dot-seconds 3`, `--quiet` (no voice), `--reuse` (skip calibration), `--windowed`, `--grab-mm 40`
-  (how low the fingertips go to pick up: 40 mm above the table by default, never below 20; letting go is at 50).
+  `--dot-seconds 3`, `--quiet` (no voice), `--reuse` (skip calibration), `--windowed`, `--grab-mm 20`
+  (pickup fingertip height above the table in mm; default and minimum 20).
 - **Measuring:** every session is logged to `~/.eyereach/sessions/` (calibration time and error, error at each
   dot, every move, pick-up and let-go, and the time of each pick-and-place). Add `--person NAME`, and for the
   error in degrees `--screen-cm` (width of the picture on the screen) and `--distance-cm` (eyes to screen).
