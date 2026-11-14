@@ -1,6 +1,6 @@
 """EyeReach: drive the arm with gaze instead of a hand.
 
-The arm driver (driver/open_manipulator_x) already follows a
+The arm driver (game/arm_link.py) already follows a
 table point (u, v) and can grab and release. Here that point comes from where the user looks.
 Hold your gaze on the claw's spot to grab; hold it on the drop zone to let go.
 """
@@ -10,8 +10,8 @@ import sys
 import time
 from pathlib import Path
 
-DRIVER = Path(__file__).resolve().parent.parent / "driver" / "open_manipulator_x"
-sys.path.insert(0, str(DRIVER / "game"))   # arm_link adds ../brain itself
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "game"))   # arm_link adds ../brain itself
 import arm_link  # noqa: E402
 
 DWELL = 0.8                    # seconds of steady gaze that count as "yes"

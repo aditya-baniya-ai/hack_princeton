@@ -3,12 +3,12 @@
 # MoveIt Servo, controllers, and this repo's scripts. Hold the real arm first: it may
 # go limp. Use it when something is left running (e.g. the arm shakes, or RViz won't close).
 #
-#   ~/Documents/Open_manipulator_x/launch/stop.sh
+#   ~/Documents/hack_princeton/launch/stop.sh
 
 # Every ROS program runs from /opt/ros/humble or the ROBOTIS workspace
 pkill -f /opt/ros/humble
 pkill -f colcon_ws/install
-pkill -f -e "gestures/(gestures|gui|greet)\.py|perception/detect\.py|voice/listen\.py|brain/(arm|pick)\.py|game/(puppet_master|ball_carry|claw_machine|hand_control)\.py" > /dev/null
+pkill -f -e "gestures/gestures\.py|brain/arm\.py|eyereach\.run_webcam" > /dev/null
 sleep 2
 
 # Restart the ROS helper (ros2 node list etc. need it after a forced stop)

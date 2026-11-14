@@ -1,6 +1,6 @@
 """
 Fix a joint that reads a whole turn off, like the base saying 353° when it faces forward
-(it's really -7°). Runs before the arm starts (hand.sh does it), so the "outside its safe
+(it's really -7°). Runs before the arm starts (eyereach.sh does it), so the "outside its safe
 range" check sees the real angle.
 
 For each arm servo (IDs 11-14, not the gripper) it reads the angle. Only when it is more

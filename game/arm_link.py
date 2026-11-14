@@ -1,14 +1,13 @@
 """
-Robo's arm for the Puppet Master game: follow the player's hand smoothly, and "whack"
-(a quick tap down onto the table and back up).
+The arm: follow a point on the table map smoothly, grab and release.
 
-The game works in "play area" positions (0 to 1, as the player sees the screen) and
-this turns them into points in front of Robo, then into joint angles with brain/arm.py
+Callers work in "play area" positions (0 to 1, as the user sees the screen) and
+this turns them into points in front of the arm, then into joint angles with brain/arm.py
 (which also checks every point is safe).
 
     RealArm     the real arm, or the simulated one in RViz (through ROS)
     VirtualArm  no robot at all: a pretend arm that behaves like the real one
-                (same speed limit and delay), to try the game on any computer
+                (same speed limit and delay), to try it on any computer
 """
 
 import math
