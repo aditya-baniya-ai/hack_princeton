@@ -327,7 +327,7 @@ def connect(node):
         print(f"\n{arms} arm programs are running at once (real and/or simulated), so the")
         print("arm won't be moved: their angles would mix and the arm would shake.")
         print("Stop them all (hold the real arm first), then start just one:")
-        print("  ~/Documents/Open_manipulator_x/launch/stop.sh\n")
+        print("  ~/Documents/hack_princeton/launch/stop.sh\n")
         return False
     # Our own programs (gesture menu, panel, voice, brain/arm.py) are all "gesturer" and
     # only send when you press something, so several are fine. Any other sender (like a
@@ -339,7 +339,7 @@ def connect(node):
         print("\nSomething else (probably MoveIt Servo from servo.launch.py) is also sending")
         print(f"commands to the arm ({', '.join(senders)}), so it won't be moved: the arm "
               "would shake.")
-        print("Stop it first:  ~/Documents/Open_manipulator_x/launch/stop.sh\n")
+        print("Stop it first:  ~/Documents/hack_princeton/launch/stop.sh\n")
         return False
 
     problems = []
