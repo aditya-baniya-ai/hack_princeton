@@ -232,7 +232,7 @@ class GuidedControl:
         if self.phase == "moving":
             return "Moving. Look at STOP or say Stop."
         if getattr(self, "tilt", False):
-            return "Turn your head to move. Nod to let go." if self.holding else "Turn your head to move. Nod to pick up."
+            return "Move your nose: the arm follows. Nod to let go." if self.holding else "Move your nose: the arm follows. Nod to pick up."
         if self.movement == "follow":
             return "Point to move. Blink twice to let go." if self.holding else "Point to move. Blink twice to pick up."
         if self.holding:

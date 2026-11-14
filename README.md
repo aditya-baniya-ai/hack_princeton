@@ -11,7 +11,7 @@ device, and it has not been tested with people who have disabilities.
 
 | Part | State |
 |---|---|
-| **Head tilt control** (the default): turn to move, nod to pick up | tested with the pretend arm and simulated head angles, and the live angles checked on the camera; **not yet tried on the real arm** |
+| **Nose following** (the default): the arm follows the nose live, nod to pick up | tested with the pretend arm, simulated faces and a live run (whole map reached, nod pick-up and nod let-go both worked); **not yet tried on the real arm** |
 | Head/eye pointer (`--control point`) | **works on the real arm** (team tests): the arm follows the pointer live; double blink picks up and lets go |
 | Pick-up on the real arm | **works**: opens, lowers to 5 cm, closes, lifts, holds until the next double blink; gripper fixes in README steps 5c and Problems |
 | Pointer accuracy | measured on one teammate only: 7.0% of the screen width on the calibration dots (head and eyes alike); `tools/measure.py` measures it properly |
@@ -83,8 +83,8 @@ The main features (details in the sections below):
   retry when poor; saved per screen and pointer, so it is reused (FIX MY AIM redoes it).
 - **Moving the arm:** live following (default) or look-and-hold; slow speeds (60 mm/s, 40 carrying); travels 12 cm
   above the table.
-- **Head tilt control (the default):** turn the head to move the arm, further for faster, nod to pick up and nod
-  again to let go; no screen calibration, just two seconds of looking straight ahead.
+- **The arm follows your nose (the default):** live, no holding and no setup step; the nose tip measured from the
+  point between the eyes; nod to pick up and nod again to let go; face centred in the window with a nose joystick.
 - **Pointer mode** (`--control point`): double blink to pick up and let go, big gaze buttons (and mouse clicks).
 - **A safe pick-up:** gripper opens first, lowers to 5 cm, closes, lifts and holds until the next double blink;
   gripper opened before the arm moves at start and before it stops.
@@ -100,50 +100,43 @@ The main features (details in the sections below):
 - **Speaker volume on screen:** QUIETER / LOUDER buttons by gaze or mouse, `+`/`-` for the helper.
 - **Amazon Nova 2 Lite** object finding and the **LangChain deepagents** task agent (not yet driving the real arm).
 
-## Control: turn your head to move, nod to pick up
+## Control: the arm follows your nose, nod to pick up
 
-The default (`launch/eyereach.sh`, or `--control tilt`). No dot calibration: at the start, look straight at the screen
-and keep still for about two seconds; that is your centre.
+The default (`launch/eyereach.sh`, or `--control tilt`). Nothing to hold and no setup step: the first moment the app
+sees your face, it takes that as straight, and from then on **the arm follows your nose live**, like a mouse.
 
 | Do this | The arm |
 |---|---|
-| **Look** left / right, or **tilt** the head left / right (ear toward the shoulder) | moves to your left / right (the stronger of the two counts) |
-| Look **up** / **down** | moves away from you / toward you |
-| Turn further | moves faster (up to the speed limits: 60 mm/s, 40 mm/s carrying) |
-| Come back to the centre, or lose the face | stops |
+| Look straight | goes to the middle of the table |
+| Move your nose right / left (turn, or tilt the head sideways) | follows to your right / left; about 20 deg reaches the edge |
+| Move your nose up / down | follows away from you / toward you |
+| Move it back | comes back |
 | **Nod** (a quick dip and back) | picks up where it is; the next nod lets go there |
+| Lose the face | stops |
 
-- **The nose guides the arm.** The point between your eyes is the reference, and the arm follows how far your nose
-  tip moves from where it sits when you look straight (in eye-widths, `gaze_webcam.nose_offset`). Measured that way,
-  looking straight reads straight wherever your face is in the camera's picture and whatever the camera's angle; the
-  earlier 3D head angle read 41 deg "straight" with the webcam off to the side and drifted, so the arm moved right
-  while you looked straight. On the screen: a cross between the eyes, a dot on the nose tip and a green circle where
-  the nose sits when straight; under the face, a big **nose joystick** (the dot is where your nose points, the green
-  ring is the still zone). The centre is taken while you look at your own face in the middle of the screen, only once
-  your head has been still for a second.
-- **Nothing moves by accident:** an 8° dead zone around the centre; a tilt must be held 0.6 s before the arm moves (a
-  nod is quicker, so a nod never moves it); a nod must dip at least 10° and come back within 0.9 s with the head not
-  turned sideways, and another nod only counts 1.2 s later. A slow tilt down is a move, not a nod.
-- **Blinking does nothing** in this mode (double blink and gaze-dwell buttons were for the pointer mode); the
-  on-screen buttons still work with a mouse click for a helper, and "Stop" by voice always works.
-- **FIX MY AIM** (or **C**) sets the centre again. The screen shows "Centre: still", "Hold the tilt..." or "Moving
-  left", and the ray from your nose points to where the arm is heading.
-- **Left is left on the screen:** your face is shown big, **in the middle of the window**, as a mirror, cut so it is
-  always in the middle of its picture (black past the camera's edges), with LEFT, RIGHT, AWAY (top) and TOWARD YOU
-  (bottom) on its sides; the one you are moving toward lights up and a big arrow from the middle of your face points
-  the way the arm is moving. The map (where the arm is) and the volume are on the left, the buttons on the right. The map is turned the same way in this mode: away from you at the top, near you at the
-  bottom, so tilting up moves the arm up on the screen. Checked: your right is the map's right is the arm's move to
-  your right (the arm faces you).
-- **Check it with your own head first (no arm):** `~/eyereach_venv/bin/python -m eyereach.head_tilt` prints the angles,
-  each move and each nod. The thresholds are at the top of `eyereach/head_tilt.py`; `FLIP_VERTICAL = True` swaps up
-  and down.
+- **The nose guides it.** The point between your eyes is the reference, and the arm follows where your nose tip is
+  from where it sat when you looked straight (in eye-widths, `gaze_webcam.nose_offset`), so it reads the same
+  wherever your face is in the camera's picture and whatever the camera's angle. (The earlier 3D head angle read
+  41 deg "straight" with the webcam off to the side and drifted, so the arm moved right while you looked straight.)
+- **Live:** readings are smoothed a little so jitter doesn't shake the arm; movements under 1.5 deg count as straight.
+  The arm glides at up to 100 mm/s (60 carrying) so it keeps up.
+- **FIX MY AIM** (or **C**) takes "straight" again, at once, from where your nose is now.
+- **On screen:** your face big in the middle of the window, mirrored and centred, with LEFT / RIGHT / AWAY (top) /
+  TOWARD YOU (bottom) on its sides (the one the arm is heading toward lights up) and an arrow showing where the arm
+  is going; a cross between the eyes, a dot on the nose tip and a green circle where the nose sits when straight; and
+  under the face a **nose joystick** (the dot is where your nose is; green inside the ring = straight). The map
+  (where the arm is, away from you at the top) and the volume are on the left, the buttons on the right.
+- **Blinking does nothing** in this mode; the on-screen buttons work with a mouse click for a helper, and "Stop" by
+  voice always works. `--control point` is the older screen-pointer mode; `HeadTilt(mode="joystick")` the
+  hold-to-move variant.
+- **Check it with your own head (no arm):** `~/eyereach_venv/bin/python -m eyereach.head_tilt`. The settings
+  (REACH, STEADY, SMOOTH, the nod) are at the top of `eyereach/head_tilt.py`.
 
 **"I can't see your face" when the face was there:** MediaPipe found the face in 98% of frames; the message came from
-other checks. In pointer mode it was also shown when the pointer went past the screen edge or the eyes looked narrow
-(looking down at the map). Tilt mode only needs a face; head pointing no longer needs open eyes. The face was also low
-in the camera picture (chin 10% from the bottom edge), so nodding or turning pushed it out: the start screen now says
-"Helper: the face is low in the picture..." when that happens, tracking keeps a turned face longer, and a drop-out under
-0.25 s doesn't stop the arm. **Put the camera so the face is in the middle of the picture.**
+other checks (in pointer mode, the pointer past the screen edge or narrow eyes). The face was also low in the camera
+picture, so nodding or turning pushed it out: the app warns the helper when the face is near an edge, tracking keeps a
+turned face longer, and a drop-out under 0.25 s doesn't stop the arm. **Put the camera so the face is in the middle of
+its picture.**
 
 ## Test everything (one command)
 

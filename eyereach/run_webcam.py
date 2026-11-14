@@ -28,7 +28,7 @@ import cv2
 import numpy as np
 
 from eyereach import eye_control, speaker_volume
-from eyereach.head_tilt import DEAD, FULL, NOSE_DEPTH, HeadTilt, nose_angles
+from eyereach.head_tilt import DEAD, NOSE_DEPTH, REACH, STEADY, HeadTilt, nose_angles
 from eyereach.session_log import SessionLog
 from eyereach.voice_commands import VoiceInput, MODEL
 from eyereach.gaze_webcam import Camera, GazeMap, IrisGaze, OneEuro, camera_view, in_view
@@ -50,7 +50,8 @@ BG = (34, 26, 26)
 DIM, WHITE, CYAN, PINK = (150, 140, 140), (235, 235, 235), (230, 220, 90), (180, 110, 255)
 GOLD, GREEN, RED, GREY = (90, 200, 255), (120, 220, 120), (90, 90, 255), (90, 85, 85)
 RAY_COLOR = (255, 230, 120)
-TILT_LEAD = 0.2                # tilt control: the arm heads this far (map units) ahead of where it is
+TILT_LEAD = 0.2                # joystick mode: the arm heads this far (map units) ahead of where it is
+FOLLOW_SPEEDS = (100.0, 1.0, 60.0, 0.6)   # follow mode: glide mm/s, joint rad/s; then while carrying (fast enough to keep up)
 STILL_DEG_S = 25.0             # the head turning faster than this (degrees per second) isn't blinking on purpose
 TELL = {   # what to do during calibration, per pointer mode: (on screen, spoken)
     "head": ("Point your nose at the yellow dot. Turn your head, not just your eyes.",
@@ -293,7 +294,7 @@ def tilt_status(ctl):
     label = getattr(ctl, "tilt_label", None)
     if not getattr(ctl, "tilt", False) or label is None:
         return "Point to move"
-    return {"centre": "Centre: still", "hold": "Hold the tilt...", "no face": "No face"}.get(label, "Moving " + label)
+    return {"centre": "Straight", "hold": "Hold the tilt...", "no face": "No face"}.get(label, "Moving " + label)
 
 
 def draw(ctl, point, tracking, paused, fps, face=None):
@@ -377,13 +378,13 @@ def draw(ctl, point, tracking, paused, fps, face=None):
             if centre[1] + radius < H:
                 cv2.circle(canvas, centre, radius, (60, 48, 48), -1, cv2.LINE_AA)
                 cv2.circle(canvas, centre, radius, DIM, 2, cv2.LINE_AA)
-                cv2.circle(canvas, centre, max(3, int(radius * DEAD / FULL)), GREEN, 2, cv2.LINE_AA)
+                cv2.circle(canvas, centre, max(4, int(radius * max(STEADY, 2.0) / REACH)), GREEN, 2, cv2.LINE_AA)
                 cv2.line(canvas, (centre[0] - radius, centre[1]), (centre[0] + radius, centre[1]), (90, 80, 80), 1)
                 cv2.line(canvas, (centre[0], centre[1] - radius), (centre[0], centre[1] + radius), (90, 80, 80), 1)
                 yaw, pitch = angles                         # mirror: the person's left (yaw > 0) is the screen's left
-                x = max(-1.0, min(1.0, -yaw / FULL))
-                y = max(-1.0, min(1.0, -pitch / FULL))
-                inside = math.hypot(yaw, pitch) <= DEAD
+                x = max(-1.0, min(1.0, -yaw / REACH))
+                y = max(-1.0, min(1.0, -pitch / REACH))
+                inside = math.hypot(yaw, pitch) <= max(STEADY, 2.0)
                 cv2.circle(canvas, (int(centre[0] + x * radius), int(centre[1] + y * radius)), int(scale(11)),
                            GREEN if inside else GOLD, -1, cv2.LINE_AA)
                 text(canvas, "your nose", centre[0] + radius + scale(10), centre[1] + scale(6), 0.5, DIM)
@@ -501,6 +502,11 @@ def welcome(camera, gaze, shown, voice, again=False):
 def tilt_step(ctl, tilt, tracking, paused, now, voice_acted=False):
     """One frame of tilt control: head for a spot TILT_LEAD ahead of the arm in the tilt's direction, at the
     tilt's speed; no tilt (or no face, or paused) and the arm stops. A nod is handled before this (ctl.blink)."""
+    if tilt is not None and tilt.target is not None:   # follow mode: go to the spot the nose points to, live
+        target = tilt.target if tracking and not voice_acted and not paused else None
+        ctl.step(("map", target) if target else None, now, False,
+                 suspended=paused or (ctl.control_mode == "vision" and not tracking))
+        return target
     moving = tracking and tilt is not None and tilt.direction is not None and not voice_acted and not paused
     base = (ctl.robot.carry if ctl.holding else ctl.robot.normal)[0]
     ctl.robot.glide = base * max(0.25, tilt.speed) if moving else base
@@ -534,59 +540,6 @@ def head_angles(gaze):
     if gaze.nose is None or gaze.pose is None:
         return None
     return nose_angles(gaze.nose, gaze.pose[2])
-
-
-STILL = 1.5          # degrees: the centre is only taken once the head wobbles less than this for a second
-
-
-def find_centre(camera, gaze, shown, voice, again=False):
-    """Tilt control: the nose's place when looking straight at your own face in the middle of the screen, taken
-    once the head has been still for a second. Returns (yaw, pitch, roll) degrees, or None if Esc was pressed."""
-    rect_ = face_rect()
-    size = rect_[2:]
-    voice.say("Let's set your centre. Look at your face in the middle of the screen, and keep still." if again else
-              "Hello. Look at your face in the middle of the screen, and keep still. "
-              "Then turn your head to move the arm, and nod to pick something up.")
-    recent, still_since = [], None
-    while True:
-        frame, f = look(camera, gaze)
-        now = time.monotonic()
-        angles = head_angles(gaze)
-        if angles is None:
-            recent, still_since = [], None
-        else:
-            recent = [(t, a) for t, a in recent if now - t <= 1.0] + [(now, angles)]
-            wobble = np.ptp(np.array([a for _, a in recent])[:, :2], axis=0).max() if len(recent) > 5 else 99
-            still_since = (still_since or now) if wobble < 2 * STILL else None
-        canvas = blank()
-        centered(canvas, "Set your centre" if again else "Hello!", W // 2, 0.08 * H, 1.3, GOLD, 2)
-        centered(canvas, "Look at your face in the middle of the screen, and keep still.", W // 2, 0.15 * H,
-                 0.9, WHITE, 2)
-        centered(canvas, "Then: turn your head to move the arm. Nod to pick up or let go.", W // 2, 0.19 * H,
-                 0.75, WHITE, 2)
-        paste(canvas, face_panel(frame, gaze, f is not None, size)[0], rect_[0], rect_[1])
-        below = rect_[1] + size[1] + scale(45)
-        edge = framing_hint(gaze)
-        if edge:
-            centered(canvas, edge, W // 2, below + scale(40), 0.7, GOLD, 2)
-        if angles is None:
-            centered(canvas, "I can't see your face.", W // 2, below, 1.0, RED, 2)
-        else:
-            done = 0.0 if still_since is None else min(1.0, (now - still_since) / 1.5)
-            if still_since is None:
-                centered(canvas, "Keep still...", W // 2, below - scale(14), 0.8, GOLD, 2)
-            bar = int(0.3 * W)
-            x0 = (W - bar) // 2
-            cv2.rectangle(canvas, (x0, int(below)), (x0 + bar, int(below + scale(10))), (60, 48, 48), -1)
-            cv2.rectangle(canvas, (x0, int(below)), (x0 + int(bar * done), int(below + scale(10))), GREEN, -1)
-            if done >= 1.0:
-                centre = np.median(np.array([a for _, a in recent]), axis=0)
-                set_nose_centre(gaze.nose)
-                voice.say("Ready. Turn your head to move the arm. Nod to pick up.")
-                return float(centre[0]), float(centre[1]), float(centre[2])
-        shown(canvas)
-        if cv2.waitKey(1) & 0xFF == 27:
-            return None
 
 
 def dot_path():
@@ -772,12 +725,9 @@ def main():
             ctl.movement, ctl.tilt = "follow", True
             MAP["away_up"] = True                      # face in the middle; tilt up = away = up on the map
             set_size(W, H)
-            centre = find_centre(camera, gaze, show, voice)
-            if centre is None:
-                return
-            head = HeadTilt()
-            head.set_centre(*centre)
-            log.event("tilt centre", yaw=round(centre[0], 1), pitch=round(centre[1], 1), roll=round(centre[2], 1))
+            head = HeadTilt()                          # the centre is taken from the first moments the face is seen
+            robot.set_speeds(*FOLLOW_SPEEDS)
+            centring = []
         if args.voice:
             device = int(args.microphone) if args.microphone and args.microphone.isdigit() else args.microphone
             if device is None:                         # the speaker's microphone first, the webcam's as fallback
@@ -805,7 +755,16 @@ def main():
             now = time.monotonic()
             tilt = None
             if head is not None:                       # tilt control: a face is all it needs
-                tilt = head.update(head_angles(gaze), now)
+                angles = head_angles(gaze)
+                if head.centre is None and angles is not None:   # straight = the first few frames of the face
+                    centring.append(angles)
+                    if len(centring) >= 6:
+                        centre = np.median(np.array(centring), axis=0)
+                        head.set_centre(*centre)
+                        set_nose_centre(gaze.nose)
+                        log.event("tilt centre", yaw=round(centre[0], 1), pitch=round(centre[1], 1),
+                                  roll=round(centre[2], 1), by="start")
+                tilt = head.update(angles, now)
                 tracking = gaze.nose is not None and gaze.pose is not None
                 point = None
                 if tracking:
@@ -815,7 +774,14 @@ def main():
                         v = min(1.0, max(0.0, v + tilt.direction[1] * TILT_LEAD))
                     point = to_screen(u, v)            # the ray goes from the nose to where the arm heads
                 ctl.tilt_label = tilt.label if tracking else "no face"
-                ctl.tilt_dir = tilt.direction if tracking and ctl.live_enabled else None
+                ctl.tilt_dir = None
+                if tracking and ctl.live_enabled and tilt.target is not None:   # arrow: from the arm toward the nose's spot
+                    au, av, _ = ctl.robot.gripper_area()
+                    du, dv = tilt.target[0] - au, tilt.target[1] - av
+                    if math.hypot(du, dv) > 0.04:
+                        ctl.tilt_dir = (du / math.hypot(du, dv), dv / math.hypot(du, dv))
+                elif tracking and ctl.live_enabled:
+                    ctl.tilt_dir = tilt.direction
                 ctl.tilt_angles = (tilt.yaw, tilt.pitch) if tracking else None
             else:
                 raw = None if f is None else on_screen(tuple(gmap.predict(f)[0]))
@@ -913,12 +879,15 @@ def main():
                 ctl.step(None, suspended=True)
                 blinks = eye_control.DoubleBlink()
                 ctl.wants_calibration = False
-                if head is not None:
-                    centre = find_centre(camera, gaze, show, voice, again=True)
-                    if centre is None:
-                        break
-                    head.set_centre(*centre)
-                    log.event("tilt centre", yaw=round(centre[0], 1), pitch=round(centre[1], 1), roll=round(centre[2], 1))
+                if head is not None:                   # straight = where the nose is now
+                    angles = head_angles(gaze)
+                    if angles is not None:
+                        head.set_centre(*angles)
+                        set_nose_centre(gaze.nose)
+                        log.event("tilt centre", yaw=round(angles[0], 1), pitch=round(angles[1], 1),
+                                  roll=round(angles[2], 1), by="fix aim")
+                        voice.say("Centre set.")
+                    ctl.press("resume", time.monotonic())
                 else:
                     done = calibrate(camera, gaze, show, voice, args.dot_seconds, again=True, log=log)
                     if done is None:

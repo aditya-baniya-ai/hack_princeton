@@ -16,7 +16,7 @@ def run(tilt, poses, start=0.0, fps=20):
 
 
 def centred():
-    h = HeadTilt()
+    h = HeadTilt(mode="joystick")
     h.set_centre(3.0, -6.0)                  # the person's straight ahead isn't exactly 0, 0
     return h
 
@@ -113,7 +113,7 @@ class TiltDrivesTheArmTest(unittest.TestCase):
         robot.held = object()
         ctl = eye_control.GuidedControl(robot, movement="follow")
         ctl.tilt = True
-        head = HeadTilt()
+        head = HeadTilt(mode="joystick")
         head.set_centre(0.0, 0.0)
         u0 = robot.gripper_area()[0]
         self.frames(ctl, head, (20.0, 0.0), 2.0)               # turn to the person's left
@@ -141,7 +141,7 @@ class TiltDrivesTheArmTest(unittest.TestCase):
         robot.start()
         ctl = eye_control.GuidedControl(robot, movement="follow")
         ctl.tilt = True
-        head = HeadTilt()
+        head = HeadTilt(mode="joystick")
         head.set_centre(0.0, 0.0)
         self.frames(ctl, head, (-20.0, 0.0), 1.5)              # moving right
         self.frames(ctl, head, None, 0.3)                       # face lost
@@ -162,22 +162,22 @@ class DropOutTest(unittest.TestCase):
 
 class SidewaysTiltTest(unittest.TestCase):
     def test_tilting_the_head_right_or_left_moves_right_or_left(self):
-        h = HeadTilt()
+        h = HeadTilt(mode="joystick")
         h.set_centre(0.0, 0.0, 0.0)
         out, _ = run(h, [((0.0, 0.0, 20.0), 1.5)])          # ear toward the right shoulder
         self.assertEqual(out[-1].label, "right")
         self.assertGreater(out[-1].direction[0], 0.9)       # u up = the person's right
-        h = HeadTilt()
+        h = HeadTilt(mode="joystick")
         h.set_centre(0.0, 0.0, 0.0)
         out, _ = run(h, [((0.0, 0.0, -20.0), 1.5)])
         self.assertEqual(out[-1].label, "left")
 
     def test_looking_right_and_tilting_right_agree(self):
-        h = HeadTilt()
+        h = HeadTilt(mode="joystick")
         h.set_centre(0.0, 0.0, 0.0)
         out, _ = run(h, [((-20.0, 0.0, 0.0), 1.5)])         # look right (yaw < 0)
         self.assertEqual(out[-1].label, "right")
-        h = HeadTilt()
+        h = HeadTilt(mode="joystick")
         h.set_centre(0.0, 0.0, 0.0)
         out, _ = run(h, [((-12.0, 0.0, 25.0), 1.5)])        # both: the stronger (tilt) wins, same way
         self.assertEqual(out[-1].label, "right")
@@ -188,10 +188,10 @@ class ScreenAgreesWithTheHeadTest(unittest.TestCase):
         from eyereach import run_webcam
         run_webcam.MAP["away_up"] = True
         try:
-            h = HeadTilt()
+            h = HeadTilt(mode="joystick")
             h.set_centre(0.0, 0.0, 0.0)
             up, _ = run(h, [((0.0, 20.0, 0.0), 1.5)])               # tilt up = away (v up)
-            h2 = HeadTilt()
+            h2 = HeadTilt(mode="joystick")
             h2.set_centre(0.0, 0.0, 0.0)
             right, _ = run(h2, [((-20.0, 0.0, 0.0), 1.5)])          # look right
             mid = run_webcam.to_screen(0.5, 0.5)
@@ -243,3 +243,61 @@ class NoseGuidesTest(unittest.TestCase):
         self.assertLess(self.angles(yaw=-20.0)[0], -17.0)     # right
         self.assertGreater(self.angles(pitch=15.0)[1], 10.0)  # up
         self.assertLess(self.angles(pitch=-15.0)[1], -10.0)   # down
+
+
+class FollowTest(unittest.TestCase):
+    """The default: the arm follows the nose live. Straight = the middle; REACH degrees = the edge; no holding."""
+
+    def test_straight_is_the_middle_and_turning_moves_the_spot_at_once(self):
+        from eyereach.head_tilt import REACH
+        h = HeadTilt()
+        h.set_centre(0.0, 0.0, 0.0)
+        out, _ = run(h, [((0.0, 0.0, 0.0), 0.5)])
+        self.assertEqual(out[-1].target, (0.5, 0.5))
+        self.assertEqual(out[-1].label, "centre")
+        out, _ = run(h, [((-REACH / 2, 0.0, 0.0), 0.4)])         # look right a bit: no holding, already there
+        self.assertAlmostEqual(out[-1].target[0], 0.75, delta=0.02)
+        self.assertEqual(out[-1].label, "right")
+        out, _ = run(h, [((0.0, REACH, 0.0), 0.6)])               # look up: away, at the edge
+        self.assertAlmostEqual(out[-1].target[1], 1.0, delta=0.02)
+        out, _ = run(h, [((0.0, 0.0, 0.0), 0.6)])                 # back to straight: back to the middle
+        self.assertAlmostEqual(out[-1].target[0], 0.5, delta=0.02)
+        self.assertAlmostEqual(out[-1].target[1], 0.5, delta=0.02)
+
+    def test_small_jitter_stays_put(self):
+        h = HeadTilt()
+        h.set_centre(0.0, 0.0, 0.0)
+        out, _ = run(h, [((0.8, -0.6, 0.0), 0.05), ((-0.7, 0.9, 0.0), 0.05)] * 10)
+        self.assertTrue(all(o.target == (0.5, 0.5) for o in out))
+
+    def test_a_nod_still_counts(self):
+        h = HeadTilt()
+        h.set_centre(0.0, 0.0, 0.0)
+        out, _ = run(h, [((0.0, 0.0), 1.5), ((0.0, -16.0), 0.25), ((0.0, 0.0), 0.5)])
+        self.assertEqual(sum(o.nod for o in out), 1)
+
+
+class FollowDrivesTheArmTest(unittest.TestCase):
+    def test_the_pretend_arm_follows_the_nose_right_and_back(self):
+        import time
+        from eyereach import eye_control, run_webcam
+        robot = eye_control.arm_link.VirtualArm()
+        robot.start()
+        robot.set_speeds(*run_webcam.FOLLOW_SPEEDS)
+        ctl = eye_control.GuidedControl(robot, movement="follow")
+        ctl.tilt = True
+        h = HeadTilt()
+        h.set_centre(0.0, 0.0, 0.0)
+
+        def frames(pose, seconds):
+            end = time.monotonic() + seconds
+            while time.monotonic() < end:
+                run_webcam.tilt_step(ctl, h.update(pose, time.monotonic()), True, False, time.monotonic())
+                time.sleep(0.03)
+        frames((0.0, 0.0, 0.0), 1.5)
+        u0 = robot.gripper_area()[0]
+        frames((-10.0, 0.0, 0.0), 2.5)                            # nose a little to the right
+        u1 = robot.gripper_area()[0]
+        self.assertGreater(u1, u0 + 0.1)                           # the arm went right
+        frames((0.0, 0.0, 0.0), 2.5)                               # nose back: the arm comes back
+        self.assertAlmostEqual(robot.gripper_area()[0], u0, delta=0.05)

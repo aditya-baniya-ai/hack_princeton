@@ -40,6 +40,9 @@ NOD_GAP = 1.2        # seconds after a nod before another one counts
 FLIP_VERTICAL = False
 NOSE_DEPTH = 0.5     # how far the nose tip stands out from the eyes, in eye-widths: a turn of a degrees moves it
                      # about NOSE_DEPTH * sin(a) eye-widths across (so 20 deg is about 0.17)
+REACH = 20.0         # follow mode: the nose turned this far (degrees) puts the arm at the edge of the table map
+STEADY = 1.5         # follow mode: nose movements smaller than this (degrees) from the centre count as the centre
+SMOOTH = 0.35        # follow mode: how much of each new reading is taken (the rest is the last one): steadies jitter
 GRACE = 0.25         # seconds a lost face keeps the last direction (MediaPipe drops a frame now and then)
 
 
@@ -50,6 +53,7 @@ class Tilt:
     label: str = "centre"        # "left", "right", "away", "toward", "left and away", ... or "centre" / "no face"
     nod: bool = False            # a nod just finished
     held: float = 0.0            # 0..1: how far the current tilt is toward HOLD (for the screen)
+    target: tuple = None         # follow mode: the spot on the table map (u, v) the nose points to
     yaw: float = 0.0             # degrees from the centre (person's left is positive)
     pitch: float = 0.0           # degrees from the centre (up is positive)
     roll: float = 0.0            # degrees from the centre (tilted to the person's right is positive)
@@ -69,8 +73,12 @@ def nose_angles(nose, roll_rad=0.0):
 
 
 class HeadTilt:
-    def __init__(self, dead=DEAD, full=FULL, hold=HOLD, flip_vertical=FLIP_VERTICAL):
-        self.dead, self.full, self.hold, self.flip = dead, full, hold, flip_vertical
+    """mode "follow" (the default): the arm follows the nose live, straight = the middle of the table, REACH
+    degrees = the edge; nothing to hold. mode "joystick": hold a tilt and the arm keeps moving that way."""
+
+    def __init__(self, dead=DEAD, full=FULL, hold=HOLD, flip_vertical=FLIP_VERTICAL, mode="follow"):
+        self.dead, self.full, self.hold, self.flip, self.mode = dead, full, hold, flip_vertical, mode
+        self.smoothed = None         # follow mode: the smoothed (lefty, pitch) in degrees
         self.centre = None           # (yaw, pitch) in degrees when looking straight ahead
         self.tilt_since = None       # when the current (outside the dead zone) tilt began
         self.tilt_side = None        # its rough direction, so changing direction restarts the hold
@@ -80,8 +88,9 @@ class HeadTilt:
         self.last_seen = None        # ((yaw, pitch), time) of the last face, for GRACE
 
     def set_centre(self, yaw, pitch, roll=0.0):
-        """Degrees; usually the median of a couple of seconds of looking straight ahead."""
+        """Degrees: the nose's reading when looking straight."""
         self.centre = (yaw, pitch, roll)
+        self.smoothed = None
         self.tilt_since = self.tilt_side = self.dip = None
         self.dip_done = False
 
@@ -101,6 +110,8 @@ class HeadTilt:
         out = Tilt(nod=nod, yaw=yaw, pitch=pitch, roll=roll)
         # left/right: looking (yaw) or tilting the head (roll), whichever is stronger; as "to the left" degrees
         lefty = yaw if abs(yaw) >= abs(roll) else -roll
+        if self.mode == "follow":
+            return self._follow(out, lefty, pitch)
         side = (abs(lefty) > self.dead and (1 if lefty > 0 else -1), abs(pitch) > self.dead and (1 if pitch > 0 else -1))
         if side == (False, False) or nod or self.dip is not None:
             self.tilt_since = self.tilt_side = None   # centred, or in the middle of a nod: don't move
@@ -120,6 +131,25 @@ class HeadTilt:
         parts = [p for p, on in (("left", du < 0), ("right", du > 0), ("away", dv > 0), ("toward you", dv < 0))
                  if on and abs(du if p in ("left", "right") else dv) > 0.35 * size]
         out.label = " and ".join(parts) or "centre"
+        return out
+
+    def _follow(self, out, lefty, pitch):
+        """The arm follows the nose: its smoothed place from the centre, straight to a spot on the table."""
+        reading = (lefty, pitch)
+        self.smoothed = reading if self.smoothed is None else tuple(
+            SMOOTH * r + (1 - SMOOTH) * s for r, s in zip(reading, self.smoothed))
+        lefty, pitch = (0.0 if abs(x) < STEADY else x for x in self.smoothed)
+        flip = -1 if self.flip else 1
+        # the person's left (lefty > 0) is u down; up (pitch > 0) is away from them, v up
+        u = min(1.0, max(0.0, 0.5 - lefty / (2 * REACH)))
+        v = min(1.0, max(0.0, 0.5 + flip * pitch / (2 * REACH)))
+        out.target = (u, v)
+        parts = [p for p, on in (("left", lefty > self.dead), ("right", lefty < -self.dead),
+                                 ("away", flip * pitch > self.dead), ("toward you", flip * pitch < -self.dead)) if on]
+        out.label = " and ".join(parts) or "centre"
+        if parts:
+            size = math.hypot(lefty, pitch)
+            out.direction = (-lefty / size, flip * pitch / size)
         return out
 
     def _nod(self, yaw, pitch, now):
