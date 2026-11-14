@@ -1,5 +1,18 @@
 {
-  "output": {"message": {"role": "assistant", "content": [{"text": "```json\n[{\"name\": \"cup\", \"box\": [120, 400, 310, 720]}, {\"name\": \"pill bottle\", \"box\": [520, 455, 610, 690]}, {\"name\": \"phone\", \"box\": [700, 610, 950, 1000]}]\n```"}]}},
+  "output": {
+    "message": {
+      "role": "assistant",
+      "content": [
+        {
+          "text": "```json\n[\n    {\"name\": \"cactus\", \"box\": [94, 341, 244, 660]},\n    {\"name\": \"telephone\", \"box\": [271, 328, 527, 737]},\n    {\"name\": \"clock\", \"box\": [463, 459, 640, 710]},\n    {\"name\": \"lamp\", \"box\": [583, 176, 900, 770]},\n    {\"name\": \"donut\", \"box\": [466, 721, 601, 833]},\n    {\"name\": \"spectacles\", \"box\": [725, 770, 955, 892]},\n    {\"name\": \"pen\", \"box\": [331, 841, 402, 994]},\n    {\"name\": \"pencil\", \"box\": [286, 844, 334, 998]},\n    {\"name\": \"eraser\", \"box\": [728, 895, 835, 930]}\n]\n```"
+        }
+      ]
+    }
+  },
   "stopReason": "end_turn",
-  "usage": {"inputTokens": 1352, "outputTokens": 74, "totalTokens": 1426}
+  "usage": {
+    "inputTokens": 370,
+    "outputTokens": 211,
+    "totalTokens": 581
+  }
 }

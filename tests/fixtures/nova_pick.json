@@ -1,5 +1,18 @@
 {
-  "output": {"message": {"role": "assistant", "content": [{"text": "{\"name\": \"pill bottle\", \"box\": [520, 455, 610, 690], \"reason\": \"the small orange bottle is the pills\"}"}]}},
+  "output": {
+    "message": {
+      "role": "assistant",
+      "content": [
+        {
+          "text": "```json\n{\n  \"name\": \"snack\",\n  \"box\": [463, 721, 605, 837],\n  \"reason\": \"the small round pastry with white sprinkles on a plate\"\n}\n```"
+        }
+      ]
+    }
+  },
   "stopReason": "end_turn",
-  "usage": {"inputTokens": 1371, "outputTokens": 38, "totalTokens": 1409}
+  "usage": {
+    "inputTokens": 386,
+    "outputTokens": 49,
+    "totalTokens": 435
+  }
 }

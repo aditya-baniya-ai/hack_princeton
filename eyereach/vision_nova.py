@@ -31,6 +31,7 @@ DETECT_PROMPT = """Find the objects on this table{only}.
 Answer with only a JSON list, one entry per object:
 [{{"name": "cup", "box": [x1, y1, x2, y2]}}]
 Box coordinates are scaled 0 to 1000 to the image width and height. Use short everyday names.
+Only list things a robot arm could pick up: not the table, the wall or the background.
 If there are no objects, answer []."""
 
 PICK_PROMPT = """The user asked for: "{request}".

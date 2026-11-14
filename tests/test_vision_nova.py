@@ -1,4 +1,4 @@
-"""No network: Nova's answers come from saved responses in tests/fixtures/.
+"""No network: Nova's answers come from saved real responses in tests/fixtures/ (a photo of a desk).
     python3 -m unittest discover -s tests
 """
 
@@ -43,16 +43,17 @@ class ParseTest(unittest.TestCase):
     def test_detect_fixture(self):
         text = vision_nova.response_text(fixture("nova_detect.json"))
         found = parse_detections(text, 640, 480)
-        self.assertEqual([d.name for d in found], ["cup", "pill bottle", "phone"])
-        self.assertEqual(found[0].box, (77, 192, 198, 346))
-        self.assertEqual(found[2].box, (448, 293, 608, 480))
+        self.assertEqual([d.name for d in found], ["cactus", "telephone", "clock", "lamp", "donut",
+                                                   "spectacles", "pen", "pencil", "eraser"])
+        self.assertEqual(found[0].box, (60, 164, 156, 317))           # cactus [94, 341, 244, 660]
+        self.assertEqual(found[8].box, (466, 430, 534, 446))          # eraser [728, 895, 835, 930]
         self.assertIsNone(found[0].confidence)
 
     def test_pick_fixture(self):
         text = vision_nova.response_text(fixture("nova_pick.json"))
         match, reason = parse_match(text, 640, 480)
-        self.assertEqual(match, Detection("pill bottle", (333, 218, 390, 331)))
-        self.assertIn("pills", reason)
+        self.assertEqual(match, Detection("snack", (296, 346, 387, 402)))  # the donut, named after the request
+        self.assertIn("pastry", reason)
 
     def test_bad_entries_are_skipped(self):
         text = '[{"name": "cup", "box": [0, 0, 500, 500]}, {"name": "x"}, {"box": [1, 2, 3]}, "junk"]'
@@ -73,7 +74,7 @@ class CallTest(unittest.TestCase):
         patch, client = nova_says(fixture("nova_detect.json"))
         with patch:
             found = vision_nova.detect_objects(IMAGE, names=["cup", "pills"])
-        self.assertEqual(len(found), 3)
+        self.assertEqual(len(found), 9)
         sent = client.converse.call_args.kwargs
         self.assertEqual(client.converse.call_count, 1)                  # one call, no retries
         self.assertIn("only these: cup, pills", sent["messages"][0]["content"][1]["text"])
@@ -82,8 +83,8 @@ class CallTest(unittest.TestCase):
     def test_pick_match(self):
         patch, _ = nova_says(fixture("nova_pick.json"))
         with patch:
-            match, _ = vision_nova.pick_match(IMAGE, "the pills")
-        self.assertEqual(match.name, "pill bottle")
+            match, _ = vision_nova.pick_match(IMAGE, "the snack")
+        self.assertEqual(match.name, "snack")
 
     def test_failure_does_not_crash(self):
         patch, _ = nova_says(error=TimeoutError("read timed out"))
