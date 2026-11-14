@@ -1,5 +1,8 @@
 # EyeReach
 
+[![tests](https://github.com/aditya-baniya-ai/hack_princeton/actions/workflows/tests.yml/badge.svg)](https://github.com/aditya-baniya-ai/hack_princeton/actions/workflows/tests.yml)
+Every pull request and push to `main` runs all the tests on GitHub (`.github/workflows/tests.yml`).
+
 A robot arm that a person with severe arm paralysis controls with their head and eyes: point at a spot on a
 table map on the screen and the arm follows, blink twice to pick something up, blink twice again to put it down.
 Amazon Nova finds the objects and talks back; a LangChain deepagents task agent plans "bring me the pills".
