@@ -43,6 +43,8 @@ NOSE_DEPTH = 0.5     # how far the nose tip stands out from the eyes, in eye-wid
 REACH = 20.0         # follow mode: the nose turned this far (degrees) puts the arm at the edge of the table map
 STEADY = 1.5         # follow mode: nose movements smaller than this (degrees) from the centre count as the centre
 SMOOTH = 0.35        # follow mode: how much of each new reading is taken (the rest is the last one): steadies jitter
+SETTLE = 20.0        # follow mode: "straight" drifts toward where the nose usually is, over about this many seconds
+SETTLE_NEAR = 12.0   # ... only while the nose is within this many degrees of straight (a real turn doesn't drag it)
 GRACE = 0.25         # seconds a lost face keeps the last direction (MediaPipe drops a frame now and then)
 
 
@@ -79,6 +81,7 @@ class HeadTilt:
     def __init__(self, dead=DEAD, full=FULL, hold=HOLD, flip_vertical=FLIP_VERTICAL, mode="follow"):
         self.dead, self.full, self.hold, self.flip, self.mode = dead, full, hold, flip_vertical, mode
         self.smoothed = None         # follow mode: the smoothed (lefty, pitch) in degrees
+        self.last_update = None      # follow mode: for the slow drift of "straight"
         self.centre = None           # (yaw, pitch) in degrees when looking straight ahead
         self.tilt_since = None       # when the current (outside the dead zone) tilt began
         self.tilt_side = None        # its rough direction, so changing direction restarts the hold
@@ -111,6 +114,7 @@ class HeadTilt:
         # left/right: looking (yaw) or tilting the head (roll), whichever is stronger; as "to the left" degrees
         lefty = yaw if abs(yaw) >= abs(roll) else -roll
         if self.mode == "follow":
+            self._settle(pose_deg, yaw, pitch, now)
             return self._follow(out, lefty, pitch)
         side = (abs(lefty) > self.dead and (1 if lefty > 0 else -1), abs(pitch) > self.dead and (1 if pitch > 0 else -1))
         if side == (False, False) or nod or self.dip is not None:
@@ -132,6 +136,17 @@ class HeadTilt:
                  if on and abs(du if p in ("left", "right") else dv) > 0.35 * size]
         out.label = " and ".join(parts) or "centre"
         return out
+
+    def _settle(self, pose_deg, yaw, pitch, now):
+        """Let "straight" drift slowly toward where the nose is while it stays near straight, so a centre
+        taken at a bad moment corrects itself; a deliberate bigger turn doesn't move it."""
+        dt = 0.0 if self.last_update is None else min(0.5, now - self.last_update)
+        self.last_update = now
+        if dt and math.hypot(yaw, pitch) < SETTLE_NEAR:
+            k = dt / SETTLE
+            c = self.centre
+            roll = pose_deg[2] if len(pose_deg) > 2 else c[2]
+            self.centre = (c[0] + k * (pose_deg[0] - c[0]), c[1] + k * (pose_deg[1] - c[1]), c[2] + k * (roll - c[2]))
 
     def _follow(self, out, lefty, pitch):
         """The arm follows the nose: its smoothed place from the centre, straight to a spot on the table."""

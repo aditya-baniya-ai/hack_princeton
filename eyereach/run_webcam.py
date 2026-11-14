@@ -499,6 +499,16 @@ def welcome(camera, gaze, shown, voice, again=False):
             return False
 
 
+_LOGGED = {"at": 0.0}
+
+
+def tracking_log_due(now, every=1.0):
+    if now - _LOGGED["at"] >= every:
+        _LOGGED["at"] = now
+        return True
+    return False
+
+
 def tilt_step(ctl, tilt, tracking, paused, now, voice_acted=False):
     """One frame of tilt control: head for a spot TILT_LEAD ahead of the arm in the tilt's direction, at the
     tilt's speed; no tilt (or no face, or paused) and the arm stops. A nod is handled before this (ctl.blink)."""
@@ -756,15 +766,20 @@ def main():
             tilt = None
             if head is not None:                       # tilt control: a face is all it needs
                 angles = head_angles(gaze)
-                if head.centre is None and angles is not None:   # straight = the first few frames of the face
-                    centring.append(angles)
-                    if len(centring) >= 6:
+                if head.centre is None and angles is not None:   # straight = the middle of the first 2 s
+                    centring.append((now, angles))
+                    if now - centring[0][0] >= 2.0:
+                        centring = [a for _, a in centring]
                         centre = np.median(np.array(centring), axis=0)
                         head.set_centre(*centre)
                         set_nose_centre(gaze.nose)
                         log.event("tilt centre", yaw=round(centre[0], 1), pitch=round(centre[1], 1),
                                   roll=round(centre[2], 1), by="start")
                 tilt = head.update(angles, now)
+                if head.centre is not None and tracking_log_due(now):        # once a second, for the session log
+                    log.event("nose", yaw=round(tilt.yaw, 1), pitch=round(tilt.pitch, 1), label=tilt.label,
+                              target=None if tilt.target is None else [round(x, 2) for x in tilt.target],
+                              straight=[round(x, 1) for x in head.centre[:2]])
                 tracking = gaze.nose is not None and gaze.pose is not None
                 point = None
                 if tracking:

@@ -301,3 +301,16 @@ class FollowDrivesTheArmTest(unittest.TestCase):
         self.assertGreater(u1, u0 + 0.1)                           # the arm went right
         frames((0.0, 0.0, 0.0), 2.5)                               # nose back: the arm comes back
         self.assertAlmostEqual(robot.gripper_area()[0], u0, delta=0.05)
+
+
+class SettleTest(unittest.TestCase):
+    def test_a_badly_taken_straight_corrects_itself_but_a_real_turn_doesnt_drag_it(self):
+        h = HeadTilt()
+        h.set_centre(8.0, 0.0, 0.0)                   # taken while glancing 8 deg off
+        out, t = run(h, [((0.0, 0.0, 0.0), 40.0)])     # then looking straight for 40 s
+        self.assertLess(abs(h.centre[0]), 2.0)
+        self.assertEqual(out[-1].target, (0.5, 0.5))
+        h = HeadTilt()
+        h.set_centre(0.0, 0.0, 0.0)
+        run(h, [((-25.0, 0.0, 0.0), 20.0)])            # a long deliberate turn
+        self.assertAlmostEqual(h.centre[0], 0.0, delta=0.5)
