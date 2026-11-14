@@ -118,6 +118,7 @@ brain/         arm.py: the robot maths, plus commands to check it (test, where, 
 gestures/      gestures.py: the ROS 2 link that moves the joints
 launch/        eyereach.sh (start the arm and the app), stop.sh (stop everything), fix_turns.py
 firmware/      servo_check: an Arduino test that stands the arm up and waves
+tools/         measure.py: gaze accuracy on 9 test dots, and timed grab trials, into results/measurements.csv
 tests/         run with: python3 -m unittest discover -s tests
 dependencies.repos   the ROBOTIS code to download (setup step 5)
 ```
@@ -150,6 +151,20 @@ python3 -m eyereach.vision_nova table.jpg "the pills"    # also says which objec
 
 If Nova cannot be reached it logs a warning and returns no objects; the app keeps running. The tests use saved answers
 in `tests/fixtures/`, so they need no network.
+
+### Measuring it (accuracy and grab times)
+
+```bash
+python3 -m tools.measure accuracy --person NAME --screen-cm 29 --distance-cm 55
+python3 -m tools.measure trials --person NAME
+```
+
+`accuracy` uses the saved calibration (or calibrates; `--recalibrate` forces it), then shows 9 test dots placed away
+from the calibration dots, so the error is measured on spots the tracker never learned. It prints the average and
+worst error in pixels, % of the screen width and degrees. `--screen-cm` is the width of the lit screen picture and
+`--distance-cm` is eyes to screen: measure both on each setup, they are only used for the degrees.
+`trials` is for a helper at the keyboard while the person uses the arm: Enter when they start, then `y` if the grab
+worked or `n` if not. Both add rows to `results/measurements.csv`.
 
 ## Hardware
 
