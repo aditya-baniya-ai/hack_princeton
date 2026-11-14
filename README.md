@@ -35,7 +35,7 @@ HoloLens 2 gaze input, so the user looks at real objects instead of a screen map
 ## How it works
 
 ```
-eyereach/run_webcam.py     webcam -> iris gaze -> a point on the table map (gaze_webcam.py)
+eyereach/run_webcam.py     webcam -> face direction (or iris gaze) -> a point on the table map (gaze_webcam.py)
    ↓  eyereach/eye_control.py: dwell to confirm, grab, hold, drop
 brain/arm_link.py          follow a table point, grab, release (or a pretend arm)
    ↓
@@ -50,21 +50,55 @@ dynamixel_hardware_interface   sends servo commands        ┘
 OpenCR (usb_to_dxl)        passes commands to the servos, which report their angles back (/joint_states)
 ```
 
-How the eye control behaves:
+How the control behaves. It is made for someone who can't use their arms: after a helper starts it, nothing
+needs a keyboard, and the screen (and a voice, through `spd-say`) always says what to do next.
 
-- **Calibrate:** look at 12 dots (about 25 seconds). It learns how your eyes map to screen positions and prints
-  its average error on the dots, which looks better than real use will.
-- **Follow:** the arm glides to where you look inside the table map ("toward you" at the top, "toward Robo" at
-  the bottom). If your face is lost, you blink, or you look outside the map, the arm holds still.
-- **Grab:** hold your gaze on the claw for 0.8 seconds. The claw must already be where you are looking.
-- **Drop:** carry it (slower), then hold your gaze on the pink DROP corner.
-- **Keys:** Esc closes, C calibrates again, Space pauses.
+### Known problem: pointing with the eyes alone is jumpy
+
+The first version moved the pointer from the irises only. In a webcam picture an iris is a few pixels wide,
+so the pointer jumped around and moved too fast to follow, and it was hard to tell where the system thought
+you were looking (calibration error 4.5-7% of the screen width, up to 200 px at the corners).
+
+**What changed:** the pointer now comes from where the face points (`--pointer head`, the default). Face Mesh
+gives 3D key points; the eye corners, nose tip, forehead and chin give the face's direction, drawn as a ray
+out of the nose. Your face is shown live with its key points, and an animated ray runs from your nose on that
+picture to the spot you are pointing at, so you always see where you point. A One Euro filter keeps the
+pointer still while you hold still and still follows a deliberate move (15 px of jitter becomes about 5 px; a
+move is followed within 0.15 s). Blinking doesn't move a head pointer, which also helps the double blink.
+`--pointer eyes` keeps the eyes-only pointer for people who can't move their head, and `--pointer both`
+uses the head for the rough spot and the eyes to fine-tune. Not yet measured on people.
+
+- **Why calibrate:** the webcam sees which way the face turns (or where the irises sit), not what that points
+  at on the screen. That depends on the person, where they sit and where the camera is, so it is learned each
+  time (and saved per pointer mode and screen size).
+- **Calibrate (about 40 s):** the screen says hello and starts by itself once the face has been steady in view
+  for 3 seconds. A yellow dot glides around 12 spots; point your nose at it (with `--pointer eyes`, follow it
+  with the eyes). Your face and its ray are shown under the dot. The dot waits while the face is lost. If it comes out poor (over 7% of the screen width) it tries once more.
+- **Move:** point at a spot on the table map and hold still for 1.5 s (a ring fills). The arm slowly goes there
+  (60 mm/s, 40 mm/s while carrying). A glance never moves it, and it does not follow the pointer around.
+- **Pick up / let go:** blink twice quickly (both blinks within a second). It picks up where the arm is, or lets
+  go when it is holding something. Measured against the person's usual eye opening; one blink, slow blinks or
+  resting the eyes never count.
+- **Buttons** (look and keep looking until they fill): **PICK UP** / **LET GO** (the same as blinking twice, for
+  people who can't blink reliably), **DROP-OFF** (carry it to the tray and let go; the pink square, set with
+  `--dropoff X Y` in mm from the arm base), **HOME** (back to the middle), **STOP** (while moving), and
+  **FIX MY AIM** (calibrate again). Greyed-out buttons do nothing.
+- **Losing the eyes** (looking away, closing them, the face out of view) never starts anything.
+- **Helper keys:** Esc closes, C calibrates again, Space pauses, V hides/shows the face picture. Options:
+  `--pointer head|eyes|both`, `--dwell 2`,
+  `--dot-seconds 3`, `--quiet` (no voice), `--reuse` (skip calibration), `--windowed`, `--grab-mm 40`
+  (how low the fingertips go to pick up: 40 mm above the table by default, never below 20; letting go is at 50).
+- **Measuring:** every session is logged to `~/.eyereach/sessions/` (calibration time and error, error at each
+  dot, every move, pick-up and let-go, and the time of each pick-and-place). Add `--person NAME`, and for the
+  error in degrees `--screen-cm` (width of the picture on the screen) and `--distance-cm` (eyes to screen).
+  `python3 -m eyereach.session_log` sums up all sessions per person.
 
 ## Folders
 
 ```
-eyereach/      the eye control: gaze_webcam.py (iris gaze, calibration), eye_control.py (dwell, grab, drop),
-               run_webcam.py (the screen app)
+eyereach/      the control: gaze_webcam.py (face direction, iris gaze, calibration, smoothing),
+               eye_control.py (dwell, double blink, grab, drop, HOME, DROP-OFF), run_webcam.py (the screen app),
+               session_log.py (the session log and its summary)
 brain/         arm.py: the robot maths, plus commands to check it (test, where, go, home)
                arm_link.py: the arm follows a point, grabs and releases (or a pretend arm)
 gestures/      gestures.py: the ROS 2 link that moves the joints
@@ -195,6 +229,23 @@ cd ~/colcon_ws && colcon build --symlink-install --packages-select open_manipula
 
 To undo, copy the backup back and rebuild the same way. Repeat this step if you ever run `vcs import` again.
 
+### 5c. Limit the gripper's squeeze (stops it overloading)
+
+Without this the gripper squeezes at full current (about 3.2 A) whenever it closes on something, overloads within
+seconds, and switches itself off (every later grab then "holds nothing"). This caps it at about 0.8 A:
+
+```bash
+X=~/colcon_ws/src/open_manipulator/open_manipulator_x_description/ros2_control/open_manipulator_x_system.ros2_control.xacro
+cp $X ~/omx_ros2_control_backup_before_gripper.xacro
+sed -i '/<gpio name="dxl5">/,/<\/gpio>/ { /<param name="Return Delay Time">0<\/param>/a\        <param name="Operating Mode">5</param>\n        <param name="Goal Current">300</param>
+}' $X
+sed -n '/<gpio name="dxl5">/,/<\/gpio>/p' $X | grep param      # should list Operating Mode 5, Goal Current 300
+cd ~/colcon_ws && colcon build --symlink-install --packages-select open_manipulator_x_description
+```
+
+If the gripper already overloaded (it won't move; `/tmp/robo_arm.log` says "Hardware error occurred" for ID 15),
+turn the 12 V off and on again to clear it.
+
 ### 6. Set up the terminal and the USB rules
 
 ```bash
@@ -236,7 +287,7 @@ launch/eyereach.sh               # the real arm
 For the real arm: turn on the 12 V power, make sure the OpenCR's USB is in the Jetson, **hold the arm** (it goes limp
 when it starts and stops), keep the power switch within reach, then run it. If it stays on "Waiting for the arm",
 look in `/tmp/robo_arm.log`. Esc in the app stops the arm too. Other options go to the app (`--camera /dev/video0`,
-`--reuse`, `--fullscreen`, `--dwell 1.2`).
+`--reuse`, `--windowed` (full screen is the default), `--dot-seconds 4`, `--dwell 1.2`).
 
 **Start the arm by hand** (for other programs): `ros2 launch open_manipulator_x_bringup hardware.launch.py port_name:=/dev/ttyACM0`,
 and wait for `Configured and activated arm_controller`. **Watch the real arm in RViz:** add `start_rviz:=true`.

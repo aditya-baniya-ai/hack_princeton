@@ -5,7 +5,7 @@
 #   launch/eyereach.sh --sim        simulated arm in RViz
 #   launch/eyereach.sh --no-arm     pretend arm, no ROS (works on any computer)
 #
-# Other options go to the app, e.g. --camera /dev/video0, --reuse, --fullscreen.
+# Other options go to the app, e.g. --camera /dev/video0, --reuse, --windowed.
 # The arm runs in the background (log: /tmp/robo_arm.log). Esc in the app (or Ctrl+C here) stops
 # everything. On the real arm, hold it first: it goes limp when it starts and stops.
 set -m   # the arm runs in its own process group, so it can be stopped cleanly

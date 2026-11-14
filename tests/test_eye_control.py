@@ -2,6 +2,7 @@
     python3 -m unittest discover -s tests
 """
 
+import math
 import sys
 import time
 import unittest
@@ -56,6 +57,172 @@ class EyeControlTest(unittest.TestCase):
         for _ in range(10):
             ctl.step(None)
         self.assertEqual((moves, ctl.phase), ([], "open"))
+
+
+def guided(look=0.3):
+    robot = eye_control.arm_link.VirtualArm()
+    robot.start()
+    return robot, eye_control.GuidedControl(robot, look=look)
+
+
+def keep_looking(ctl, thing, until, seconds=20):
+    """Look at the same thing until the phase is `until` (or time runs out)."""
+    end = time.monotonic() + seconds
+    while ctl.phase != until and time.monotonic() < end:
+        ctl.step(thing)
+        time.sleep(0.02)
+    return ctl.phase
+
+
+class GuidedControlTest(unittest.TestCase):
+    def test_slow_by_default(self):
+        robot, ctl = guided()
+        self.assertLessEqual(robot.glide, 60.0)
+        robot.carrying(True)
+        self.assertLessEqual(robot.glide, 40.0)
+
+    def test_nothing_moves_from_a_glance(self):
+        robot, ctl = guided(look=1.5)
+        moves = []
+        robot.follow = lambda u, v: moves.append((u, v))
+        for spot in ((0.2, 0.2), (0.8, 0.3), (0.5, 0.9), None, (0.3, 0.6)):   # eyes wandering around
+            for _ in range(5):
+                ctl.step(None if spot is None else ("map", spot))
+                time.sleep(0.02)
+        self.assertEqual((moves, ctl.phase, ctl.target), ([], "waiting", None))
+
+    def test_look_go_pick_up_move_and_let_go(self):
+        robot, ctl = guided()
+        robot.held = object()                                    # something is on the table
+        start = robot.gripper_area()[:2]
+        here = (start[0], min(1.0, start[1] + 0.15))
+        self.assertEqual(keep_looking(ctl, ("map", here), "there"), "there")
+        ctl.step(None)                                           # look away, then at the button
+        self.assertEqual(keep_looking(ctl, ("button", "pick up"), "picking"), "picking")
+        self.assertEqual(keep_looking(ctl, None, "there"), "there")
+        self.assertTrue(ctl.holding)
+        self.assertEqual(ctl.buttons()[0][0], "let go")
+        ctl.step(None)
+        self.assertEqual(keep_looking(ctl, ("button", "let go"), "letting go"), "letting go")
+        self.assertEqual(keep_looking(ctl, None, "waiting"), "waiting")
+        self.assertFalse(ctl.holding or robot.closed)
+
+    def test_stop_while_moving(self):
+        robot, ctl = guided()
+        far = (0.9, 0.9)
+        keep_looking(ctl, ("map", far), "moving")
+        ctl.step(None)
+        self.assertEqual(keep_looking(ctl, ("button", "stop"), "waiting", seconds=3), "waiting")
+        self.assertIsNone(ctl.target)
+
+    def test_greyed_out_buttons_do_nothing(self):
+        robot, ctl = guided()
+        self.assertFalse(ctl.can("stop"))                        # not moving
+        for _ in range(30):
+            ctl.step(("button", "stop"))
+            time.sleep(0.02)
+        self.assertEqual(ctl.phase, "waiting")
+
+    def test_fix_my_aim_asks_for_calibration(self):
+        robot, ctl = guided()
+        keep_looking(ctl, ("button", "aim"), "never", seconds=0.6)
+        self.assertTrue(ctl.wants_calibration)
+
+
+def eyes(blinker, pattern, start=0.0, fps=20):
+    """Feed eye openings: pattern is [(opening, seconds), ...]. Returns the times a double blink fired."""
+    fired, t = [], start
+    for opening, seconds in pattern:
+        for _ in range(max(1, round(seconds * fps))):
+            t += 1 / fps
+            if blinker.update(opening, t):
+                fired.append(round(t, 2))
+    return fired
+
+
+OPEN, SHUT = 0.28, 0.06
+
+
+class DoubleBlinkTest(unittest.TestCase):
+    def test_two_quick_blinks_fire_once(self):
+        b = eye_control.DoubleBlink()
+        fired = eyes(b, [(OPEN, 2), (SHUT, 0.15), (OPEN, 0.3), (SHUT, 0.15), (OPEN, 1)])
+        self.assertEqual(len(fired), 1)
+
+    def test_one_blink_or_blinks_far_apart_do_nothing(self):
+        b = eye_control.DoubleBlink()
+        self.assertEqual(eyes(b, [(OPEN, 2), (SHUT, 0.15), (OPEN, 3), (SHUT, 0.15), (OPEN, 3)]), [])
+
+    def test_resting_the_eyes_does_nothing(self):
+        b = eye_control.DoubleBlink()
+        self.assertEqual(eyes(b, [(OPEN, 2), (SHUT, 2), (OPEN, 0.3), (SHUT, 0.15), (OPEN, 1)]), [])
+
+    def test_works_for_narrow_eyes_and_losing_the_face_resets(self):
+        b = eye_control.DoubleBlink()
+        self.assertEqual(len(eyes(b, [(0.15, 2), (0.04, 0.15), (0.15, 0.3), (0.04, 0.15), (0.15, 1)])), 1)
+        b = eye_control.DoubleBlink()
+        self.assertEqual(eyes(b, [(OPEN, 2), (SHUT, 0.15), (None, 0.3), (SHUT, 0.15), (OPEN, 1)]), [])
+
+
+class SavedMovesTest(unittest.TestCase):
+    def test_blink_picks_up_and_drop_off_lets_go_there(self):
+        robot, ctl = guided()
+        robot.held = object()
+        ctl.step(None, double_blink=True)                        # blink twice: pick up here
+        self.assertEqual(ctl.phase, "picking")
+        self.assertEqual(keep_looking(ctl, None, "there"), "there")
+        self.assertTrue(ctl.holding)
+        self.assertEqual(keep_looking(ctl, ("button", "dropoff"), "moving"), "moving")
+        self.assertEqual(keep_looking(ctl, None, "waiting", seconds=40), "waiting")
+        self.assertFalse(ctl.holding)
+        u, v, _ = robot.gripper_area()
+        self.assertLess(math.dist((u, v), ctl.dropoff), 0.08)
+        names = [name for name, _ in ctl.events]
+        self.assertEqual(names[0], "pick")
+        self.assertIn("task done", names)
+
+    def test_home_and_drop_off_only_when_they_make_sense(self):
+        robot, ctl = guided()
+        self.assertFalse(ctl.can("dropoff"))                     # nothing to drop off
+        self.assertTrue(ctl.can("home"))
+        keep_looking(ctl, ("button", "home"), "moving")
+        self.assertEqual(ctl.target, ctl.home)
+
+
+class GrabHeightTest(unittest.TestCase):
+    def test_picks_up_at_a_safe_height(self):
+        robot, ctl = guided()
+        heights = []
+        robot.grab = lambda height: heights.append(height) or False
+        ctl.blink(time.monotonic())
+        self.assertEqual(heights, [eye_control.GRAB_MM])
+        self.assertGreaterEqual(eye_control.GuidedControl(robot, grab_mm=5).grab_mm, 20.0)
+
+
+class RestingEyesTest(unittest.TestCase):
+    def test_looking_at_the_arm_itself_is_not_a_move(self):
+        robot, ctl = guided()
+        here = robot.gripper_area()[:2]
+        for _ in range(60):                                      # stare at the claw for over a second
+            ctl.step(("map", (here[0] + 0.02, here[1])))
+            time.sleep(0.02)
+        self.assertEqual((ctl.phase, [n for n, _ in ctl.events]), ("waiting", []))
+
+
+class SessionLogTest(unittest.TestCase):
+    def test_writes_and_sums_up(self):
+        import tempfile
+        from eyereach import session_log
+        with tempfile.TemporaryDirectory() as d:
+            log = session_log.SessionLog("tester", 1800, 34.0, 60.0, folder=Path(d))
+            log.calibration(41.0, 90.0, [80, 100])
+            log.event("pick", by="blink")
+            log.event("picked", holding=True)
+            log.event("task done", seconds=21.5)
+            log.close()
+            p = session_log.summary(Path(d))["tester"]
+            self.assertEqual((p["picks"], p["blinks"], p["held"], p["tasks"]), (1, 1, 1, [21.5]))
+            self.assertAlmostEqual(p["cal_deg"][0], 1.62, places=1)   # 90 px of 1800 on 34 cm, at 60 cm
 
 
 if __name__ == "__main__":

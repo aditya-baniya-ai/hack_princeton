@@ -72,6 +72,8 @@ class ArmBase:
         self.aim = None              # the point (x, y mm) the gripper is sliding to
         self.glide = MAX_GLIDE       # mm/s: the sliding speed right now
         self.speed = MAX_SPEED       # rad/s: the fastest joint speed right now
+        self.normal = (MAX_GLIDE, MAX_SPEED)       # (glide, speed) when not carrying
+        self.carry = (CARRY_GLIDE, CARRY_SPEED)    # ... and while carrying
         self.hover = HOVER_HEIGHT    # mm: the gliding height
         self.whack_started = None    # time the current whack began, or None
         self.whack_spot = None       # where the gripper was when it whacked (x, y)
@@ -94,9 +96,15 @@ class ArmBase:
                 return joints
         return None
 
+    def set_speeds(self, glide, speed, carry_glide, carry_speed):
+        """Slower limits (mm/s and rad/s), normal and while carrying. Never above the defaults."""
+        self.normal = (min(glide, MAX_GLIDE), min(speed, MAX_SPEED))
+        self.carry = (min(carry_glide, CARRY_GLIDE), min(carry_speed, CARRY_SPEED))
+        self.glide, self.speed = self.normal
+
     def carrying(self, on):
         """Slower while carrying something (on), back to normal speed after."""
-        self.glide, self.speed = (CARRY_GLIDE, CARRY_SPEED) if on else (MAX_GLIDE, MAX_SPEED)
+        self.glide, self.speed = self.carry if on else self.normal
 
     def busy(self):
         """Whacking, grabbing or releasing: the arm doesn't follow the hand meanwhile."""
@@ -166,8 +174,8 @@ class ArmBase:
             return False
         now = time.monotonic()
         up = list(self.command)
-        # Long enough that no joint goes faster than MAX_SPEED (further down = longer)
-        move = max(0.45, max(abs(d - u) for d, u in zip(down, up)) / MAX_SPEED)
+        # Long enough that no joint goes faster than the speed limit (further down = longer)
+        move = max(0.45, max(abs(d - u) for d, u in zip(down, up)) / self.speed)
         self.send([down], [move])
         self.steps = [(now + move + 0.05, lambda: self.set_gripper(closed)),
                       (now + move + 0.05 + GRIPPER_WAIT, lambda: self.send([up], [move]))]

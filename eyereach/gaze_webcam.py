@@ -1,11 +1,17 @@
-"""Webcam eye tracking: iris position from MediaPipe Face Mesh, mapped to a point on the screen.
+"""Webcam pointing from MediaPipe Face Mesh: where the face points (head) and/or the irises (eyes), mapped
+to a point on the screen.
 
-IrisGaze.features() turns a camera frame into a few numbers about where the eyes point.
+IrisGaze.features() turns a camera frame into a few numbers about where the person points:
+  head  the direction the face points, from key points (eye corners, nose tip, forehead, chin, mouth
+        corners) fitted to a 3D face model: a steady "ray" out of the nose. Needs some head movement.
+  eyes  the irises inside the eyes. No head movement needed, but small and jittery in a webcam picture.
+  both  the two together (the head for the rough spot, the eyes to fine-tune).
 GazeMap learns the mapping from those numbers to screen pixels from a short calibration
-(look at the dots). Smooth steadies the result.
+(follow the dot). OneEuro steadies the result.
 """
 
 import json
+import math
 from pathlib import Path
 
 import cv2
@@ -16,6 +22,20 @@ RIGHT = dict(outer=33, inner=133, upper=159, lower=145, iris=468)    # the perso
 LEFT = dict(outer=263, inner=362, upper=386, lower=374, iris=473)
 NOSE = 1
 BLINK = 0.12      # eye opening / eye width below this is a blink: the frame is skipped
+MODES = ("head", "eyes", "both")
+
+FOREHEAD, CHIN = 10, 152
+RAY = 1.6         # the ray out of the nose is drawn this many eye-spans long on the face picture
+
+
+def eye_opening(pts):
+    """How open the eyes are: eyelid gap / eye width, both eyes averaged (about 0.25 open, under 0.12 shut)."""
+    pts = np.asarray(pts, float)
+    across = pts[LEFT["outer"]] - pts[RIGHT["outer"]]
+    h = across / np.linalg.norm(across)
+    v = np.array([-h[1], h[0]])
+    return float(np.mean([abs((pts[e["lower"]] - pts[e["upper"]]) @ v) / np.linalg.norm(pts[e["outer"]] - pts[e["inner"]])
+                          for e in (RIGHT, LEFT)]))
 
 
 def features_from_landmarks(pts, size):
@@ -44,24 +64,116 @@ def features_from_landmarks(pts, size):
     return np.array([*np.mean(gaze, axis=0), opening, *head, *(eyes / np.asarray(size, float))])
 
 
+def unit(v):
+    return v / (np.linalg.norm(v) + 1e-9)
+
+
+def head_pose(pts3, size):
+    """Which way the face points, from the 3D key points Face Mesh gives (x, y in pixels, z depth in the
+    same units, smaller = nearer the camera): the eye-to-eye axis and the chin-to-forehead axis.
+    Returns (yaw, pitch, roll in radians, nose x and y as parts of the frame, out-of-face direction,
+    eye span in pixels), or None. yaw > 0: the face turned toward the picture's right; pitch > 0: up."""
+    w, h = size
+    pts3 = np.asarray(pts3, float)
+    across = unit(pts3[LEFT["outer"]] - pts3[RIGHT["outer"]])        # to the person's left
+    up = pts3[FOREHEAD] - pts3[CHIN]
+    up = unit(up - (up @ across) * across)                             # chin to forehead, square to across
+    out = np.cross(across, up)                                         # out of the face (toward the camera: -z)
+    if not np.all(np.isfinite(out)):
+        return None
+    yaw = math.atan2(out[0], -out[2])
+    pitch = math.atan2(-out[1], math.hypot(out[0], out[2]))
+    roll = math.atan2(-across[1], across[0])
+    span = float(np.linalg.norm(pts3[LEFT["outer"], :2] - pts3[RIGHT["outer"], :2]))
+    return yaw, pitch, roll, pts3[NOSE][0] / w, pts3[NOSE][1] / h, out, span
+
+
+def head_ray(pose, pts):
+    """The nose tip and the end of the ray out of the face, in frame pixels: ((x, y), (x, y))."""
+    out, span = pose[5], pose[6]
+    nose = np.asarray(pts[NOSE][:2], float)
+    flat = out[:2] / max(math.hypot(*out[:2]), 0.25)    # stays visible even when facing the camera head-on
+    end = nose + RAY * span * flat * min(1.0, math.hypot(*out[:2]) * 3)
+    return tuple(nose), tuple(end)
+
+
 class IrisGaze:
-    def __init__(self):
+    def __init__(self, mode="head"):
         import mediapipe as mp
+        if mode not in MODES:
+            raise ValueError(f"mode must be one of {MODES}")
+        self.mode = mode
         self.mesh = mp.solutions.face_mesh.FaceMesh(
             max_num_faces=1, refine_landmarks=True,
             min_detection_confidence=0.5, min_tracking_confidence=0.5)
+        self.pts = None          # landmarks of the last frame (None: no face), for the camera view
+        self.opening = None      # how open the eyes were in the last frame (None: no face), for blinks
+        self.pose = None         # head_pose() of the last frame, for the ray
+        self.size = (640, 480)
 
     def features(self, frame):
-        """Features of the face in a BGR frame, or None (no face, or a blink)."""
+        """Features of the face in a BGR frame, or None (no face; in eyes mode also a blink)."""
         h, w = frame.shape[:2]
+        self.size = (w, h)
         found = self.mesh.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)).multi_face_landmarks
         if not found:
+            self.pts, self.opening, self.pose = None, None, None
             return None
-        pts = np.array([(p.x * w, p.y * h) for p in found[0].landmark])
-        return features_from_landmarks(pts, (w, h))
+        marks = found[0].landmark
+        self.pts = np.array([(p.x * w, p.y * h) for p in marks])
+        self.opening = eye_opening(self.pts)
+        self.pose = head_pose([(p.x * w, p.y * h, p.z * w) for p in marks], (w, h))
+        head = None if self.pose is None else np.array(self.pose[:5])
+        if self.mode == "head":
+            return head                            # blinking doesn't move a head pointer
+        eyes = features_from_landmarks(self.pts, (w, h))
+        if self.mode == "eyes" or eyes is None or head is None:
+            return eyes if self.mode == "eyes" else None
+        return np.concatenate([eyes[:2], head[:2], eyes[2:3], head[2:]])   # both: eyes and head angles first
+
+    def ray(self):
+        """Nose tip and ray end in frame pixels for the last frame, or None."""
+        return None if self.pose is None else head_ray(self.pose, self.pts)
 
     def close(self):
         self.mesh.close()
+
+
+def in_view(point, frame_size, size):
+    """A frame pixel -> where it is on camera_view's mirrored picture of the given size."""
+    return int(size[0] - point[0] * size[0] / frame_size[0]), int(point[1] * size[1] / frame_size[1])
+
+
+def camera_view(frame, pts, size, ok, ray=None, frame_size=(640, 480)):
+    """The camera picture as a mirror, scaled to size (w, h), with the key points marked: eye corners,
+    irises, nose tip, forehead and chin, and the ray out of the face (ray: from IrisGaze.ray()).
+    ok: features were found this frame (green), else face lost or blinking (red)."""
+    w, h = size
+    if frame is None:
+        view = np.zeros((h, w, 3), np.uint8)
+        cv2.putText(view, "NO CAMERA", (10, h // 2), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (80, 80, 255), 1, cv2.LINE_AA)
+        return view
+    fh, fw = frame.shape[:2]
+    sx, sy = w / fw, h / fh
+    view = cv2.flip(cv2.resize(frame, (w, h)), 1)
+    color = (120, 220, 120) if ok else (80, 80, 255)
+    if pts is not None:
+        mark = lambda i: (int(w - pts[i][0] * sx), int(pts[i][1] * sy))     # noqa: E731  mirrored
+        dot = max(2, w // 120)
+        for eye in (RIGHT, LEFT):
+            cv2.line(view, mark(eye["outer"]), mark(eye["inner"]), color, 1, cv2.LINE_AA)
+            cv2.circle(view, mark(eye["iris"]), dot, (90, 200, 255), -1, cv2.LINE_AA)
+        for i in (FOREHEAD, CHIN, 61, 291):                                  # forehead, chin, mouth corners
+            cv2.circle(view, mark(i), dot, color, -1, cv2.LINE_AA)
+        if ray is not None:                                                  # the ray out of the nose
+            nose, end = in_view(ray[0], frame_size, size), in_view(ray[1], frame_size, size)
+            cv2.arrowedLine(view, nose, end, (255, 230, 120), max(2, w // 160), cv2.LINE_AA, tipLength=0.2)
+            cv2.circle(view, nose, dot + 2, (255, 230, 120), -1, cv2.LINE_AA)
+    label = "face OK" if ok else ("blink / eyes not clear" if pts is not None else "NO FACE")
+    cv2.rectangle(view, (0, h - 26), (w - 1, h - 1), (30, 24, 24), -1)
+    cv2.rectangle(view, (0, 0), (w - 1, h - 1), color, 2)
+    cv2.putText(view, label, (8, h - 9), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+    return view
 
 
 class Camera:
@@ -117,6 +229,42 @@ class GazeMap:
     @classmethod
     def load(cls, path):
         return cls(**json.loads(Path(path).read_text()))
+
+
+class OneEuro:
+    """Steadies a moving point: strong smoothing while it is nearly still (a steady pointer for holding
+    on a spot), less when it moves fast (so a deliberate move isn't laggy). The One Euro filter
+    (Casiez, Roussel and Vogel, CHI 2012)."""
+
+    def __init__(self, still_hz=0.4, speed_up=0.0015, dhz=1.0):
+        self.still_hz, self.speed_up, self.dhz = still_hz, speed_up, dhz
+        self.x = self.dx = self.t = None
+
+    @staticmethod
+    def alpha(hz, dt):
+        tau = 1.0 / (2 * math.pi * hz)
+        return 1.0 / (1.0 + tau / dt)
+
+    def __call__(self, point, now=None):
+        if point is None:
+            return None if self.x is None else tuple(self.x)    # keep the last spot while the face is lost
+        import time
+        now = time.monotonic() if now is None else now
+        p = np.asarray(point, float)
+        if self.x is None:
+            self.x, self.dx, self.t = p, np.zeros(2), now
+            return tuple(p)
+        dt = max(now - self.t, 1e-3)
+        self.t = now
+        a = self.alpha(self.dhz, dt)
+        self.dx = a * (p - self.x) / dt + (1 - a) * self.dx
+        hz = self.still_hz + self.speed_up * float(np.linalg.norm(self.dx))
+        a = self.alpha(hz, dt)
+        self.x = a * p + (1 - a) * self.x
+        return tuple(self.x)
+
+    def reset(self):
+        self.x = self.dx = self.t = None
 
 
 class Smooth:
