@@ -4,7 +4,7 @@
 
 Recorded: each calibration (how long it took, the error in pixels, % of the screen width and, when the
 screen width and the eyes-to-screen distance are given, in degrees; also the error at each dot), every
-move (by looking, HOME or DROP-OFF), pick-ups (by blink or button, and whether something was held),
+move (by looking), pick-ups (by blink or button, and whether something was held),
 let-gos, STOPs, FIX MY AIMs, and each finished pick-and-place with its time.
 """
 

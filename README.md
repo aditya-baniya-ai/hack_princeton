@@ -103,7 +103,7 @@ uses the head for the rough spot and the eyes to fine-tune. Not yet measured on 
 
 ```
 eyereach/      the control: gaze_webcam.py (face direction, iris gaze, calibration, smoothing),
-               eye_control.py (dwell, double blink, grab, drop, HOME, DROP-OFF), run_webcam.py (the screen app),
+               eye_control.py (pointer following, dwell, double blink, pick up, let go), run_webcam.py (the screen app),
                session_log.py (the session log and its summary)
 brain/         arm.py: the robot maths, plus commands to check it (test, where, go, home)
                arm_link.py: the arm follows a point, grabs and releases (or a pretend arm)
