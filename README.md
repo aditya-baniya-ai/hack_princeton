@@ -1,7 +1,7 @@
 # EyeReach
 
-A robot arm that a person with severe arm paralysis controls with their head and eyes: point at a spot on a
-table map on the screen and the arm follows, blink twice to pick something up, blink twice again to put it down.
+A robot arm that a person with severe arm paralysis controls with their head: turn the head and the arm moves that
+way, nod to pick something up, nod again to put it down.
 Amazon Nova finds the objects and talks back; a LangChain deepagents task agent plans "bring me the pills".
 
 Built at HackPrinceton Fall 2026 (Nov 13-15, 2026). This is a research prototype, not a medical
@@ -11,7 +11,8 @@ device, and it has not been tested with people who have disabilities.
 
 | Part | State |
 |---|---|
-| Head/eye pointer, calibration and the screen app | **works on the real arm** (team tests): the arm follows the pointer live; double blink picks up and lets go |
+| **Head tilt control** (the default): turn to move, nod to pick up | tested with the pretend arm and simulated head angles, and the live angles checked on the camera; **not yet tried on the real arm** |
+| Head/eye pointer (`--control point`) | **works on the real arm** (team tests): the arm follows the pointer live; double blink picks up and lets go |
 | Pick-up on the real arm | **works**: opens, lowers to 5 cm, closes, lifts, holds until the next double blink; gripper fixes in README steps 5c and Problems |
 | Pointer accuracy | measured on one teammate only: 7.0% of the screen width on the calibration dots (head and eyes alike); `tools/measure.py` measures it properly |
 | Amazon Nova 2 Lite (find objects) | **works through Bedrock** (live call checked); not yet used by the eye app |
@@ -82,8 +83,9 @@ The main features (details in the sections below):
   retry when poor; saved per screen and pointer, so it is reused (FIX MY AIM redoes it).
 - **Moving the arm:** live following (default) or look-and-hold; slow speeds (60 mm/s, 40 carrying); travels 12 cm
   above the table.
-- **Double blink to pick up and let go**, ignored while the head turns and in the first 3 s; big gaze buttons (and
-  mouse clicks) as a backup.
+- **Head tilt control (the default):** turn the head to move the arm, further for faster, nod to pick up and nod
+  again to let go; no screen calibration, just two seconds of looking straight ahead.
+- **Pointer mode** (`--control point`): double blink to pick up and let go, big gaze buttons (and mouse clicks).
 - **A safe pick-up:** gripper opens first, lowers to 5 cm, closes, lifts and holds until the next double blink;
   gripper opened before the arm moves at start and before it stops.
 - **Gripper fixes:** a current limit so it can't overload (setup step 5c), and a start-up check that resets its turn
@@ -97,6 +99,37 @@ The main features (details in the sections below):
   first, the speaker's as fallback; every phrase heard is shown, with why it was ignored.
 - **Speaker volume on screen:** QUIETER / LOUDER buttons by gaze or mouse, `+`/`-` for the helper.
 - **Amazon Nova 2 Lite** object finding and the **LangChain deepagents** task agent (not yet driving the real arm).
+
+## Control: turn your head to move, nod to pick up
+
+The default (`launch/eyereach.sh`, or `--control tilt`). No dot calibration: at the start, look straight at the screen
+and keep still for about two seconds; that is your centre.
+
+| Do this | The arm |
+|---|---|
+| Turn your head **left** / **right** | moves to your left / right |
+| Tilt your head **up** / **down** | moves away from you / toward you |
+| Turn further | moves faster (up to the speed limits: 60 mm/s, 40 mm/s carrying) |
+| Come back to the centre, or lose the face | stops |
+| **Nod** (a quick dip and back) | picks up where it is; the next nod lets go there |
+
+- **Nothing moves by accident:** an 8° dead zone around the centre; a tilt must be held 0.6 s before the arm moves (a
+  nod is quicker, so a nod never moves it); a nod must dip at least 10° and come back within 0.9 s with the head not
+  turned sideways, and another nod only counts 1.2 s later. A slow tilt down is a move, not a nod.
+- **Blinking does nothing** in this mode (double blink and gaze-dwell buttons were for the pointer mode); the
+  on-screen buttons still work with a mouse click for a helper, and "Stop" by voice always works.
+- **FIX MY AIM** (or **C**) sets the centre again. The screen shows "Centre: still", "Hold the tilt..." or "Moving
+  left", and the ray from your nose points to where the arm is heading.
+- **Check it with your own head first (no arm):** `~/eyereach_venv/bin/python -m eyereach.head_tilt` prints the angles,
+  each move and each nod. The thresholds are at the top of `eyereach/head_tilt.py`; `FLIP_VERTICAL = True` swaps up
+  and down.
+
+**"I can't see your face" when the face was there:** MediaPipe found the face in 98% of frames; the message came from
+other checks. In pointer mode it was also shown when the pointer went past the screen edge or the eyes looked narrow
+(looking down at the map). Tilt mode only needs a face; head pointing no longer needs open eyes. The face was also low
+in the camera picture (chin 10% from the bottom edge), so nodding or turning pushed it out: the start screen now says
+"Helper: the face is low in the picture..." when that happens, tracking keeps a turned face longer, and a drop-out under
+0.25 s doesn't stop the arm. **Put the camera so the face is in the middle of the picture.**
 
 ## Test everything (one command)
 
@@ -240,6 +273,7 @@ eyereach/      the control: gaze_webcam.py (face direction, iris gaze, calibrati
                eye_control.py (pointer following, dwell, double blink, pick up, let go), run_webcam.py (the screen app),
                session_log.py (the session log and its summary)
                vision_nova.py (Amazon Nova 2 Lite: names the objects on the table and gives each a box)
+               head_tilt.py (turn to move, nod to pick up; python3 -m eyereach.head_tilt checks it live)
                voice_commands.py (offline Vosk commands), audio_devices.py (webcam mic first, speaker's as fallback)
                speaker_volume.py (the speaker volume behind QUIETER / LOUDER)
 agent/         task_agent.py: the deepagents task agent ("bring me the pills": plan, confirm, pick, drop, tell)

@@ -105,7 +105,7 @@ class IrisGaze:
         self.mode = mode
         self.mesh = mp.solutions.face_mesh.FaceMesh(
             max_num_faces=1, refine_landmarks=True,
-            min_detection_confidence=0.5, min_tracking_confidence=0.5)
+            min_detection_confidence=0.5, min_tracking_confidence=0.3)   # keep a turned or edge face
         self.pts = None          # landmarks of the last frame (None: no face), for the camera view
         self.opening = None      # how open the eyes were in the last frame (None: no face), for blinks
         self.pose = None         # head_pose() of the last frame, for the ray
