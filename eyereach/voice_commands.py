@@ -27,6 +27,7 @@ PHRASES = {
     'robot pick up': 'pick up', 'robot release': 'let go',
     'robot release the item': 'let go', 'robot let go': 'let go',
     'robot resume': 'resume', 'robot fix my aim': 'aim',
+    'robot yes': 'yes', 'robot no': 'no',            # answers when the task agent asks "is it the banana?"
 }
 for direction in ('left', 'right', 'toward me', 'away from me'):
     PHRASES[f'robot move {direction}'] = ('jog', direction, 20.0)
@@ -216,6 +217,9 @@ class SonicInput:
             if 'error' in message:
                 self.error = message['error']
             action = parse('robot ' + str(message.get('command', '')))
+            if str(message.get('task', '')).strip():      # "bring me the banana": for the task agent
+                action = ('task', str(message['task']).strip()[:200])
+                message.setdefault('command', action[1])
             if action is not None:
                 now = time.monotonic()
                 self.last_heard = message.get('heard') or message['command']

@@ -18,7 +18,7 @@ from langchain_core.messages import AIMessage
 from pydantic import Field
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from agent.task_agent import Robot, run  # noqa: E402
+from agent.task_agent import Robot, run, serve  # noqa: E402
 
 ids = count()
 
@@ -119,6 +119,32 @@ class AgentTest(unittest.TestCase):
         run("bring me the pills again", self.robot(says_yes=True), second, self.notes.name)
         shown = " ".join(str(m.content) for m in second.seen[0])
         self.assertIn("The pills are usually next to the cup.", shown)      # the note is in the new run's prompt
+
+
+class ServeTest(unittest.TestCase):
+    """Inside the eye app: JSON lines both ways; the app answers the confirm and does the pick."""
+
+    def test_a_task_through_the_app(self):
+        import io
+        import json
+        notes = tempfile.TemporaryDirectory()
+        self.addCleanup(notes.cleanup)
+        app_says = io.StringIO('{"task": "bring me the pills"}\n{"answer": true}\n{"result": null}\n')
+        out = io.StringIO()
+        script = model(*FIND_PILLS, call("ask_user_to_confirm", name="pill bottle"), call("pick", name="pill bottle"),
+                       call("drop"), *TELL_CAREGIVER, say("Done: the pills are next to you."))
+        stdout = sys.stdout
+        try:
+            serve(model=script, notes_dir=notes.name, lines=app_says, out=out,
+                  objects=[{"name": "pill bottle", "u": 0.42, "v": 0.60}])
+        finally:
+            sys.stdout = stdout
+        said = [json.loads(line) for line in out.getvalue().splitlines()]
+        self.assertEqual(said[0], {"status": "ready"})
+        self.assertIn({"confirm": "pill bottle"}, said)
+        self.assertIn({"pick": {"name": "pill bottle", "u": 0.42, "v": 0.60}}, said)
+        self.assertIn({"caregiver": "I brought the pills to your person."}, said)
+        self.assertEqual(said[-1], {"reply": "Done: the pills are next to you."})
 
 
 class RobotTest(unittest.TestCase):

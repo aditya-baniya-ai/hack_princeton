@@ -50,22 +50,32 @@ READ_ALOUD_PROMPT = ("Read the user's text aloud exactly as written, word for wo
                      "Do not add, answer or change anything.")
 
 # Every command is "robot " + one of these in eyereach/voice_commands.py, so the eye app's whitelist decides.
-COMMANDS = ["stop", "use voice", "use vision", "grab", "release", "resume", "fix my aim"] + \
+COMMANDS = ["stop", "use voice", "use vision", "grab", "release", "resume", "fix my aim", "yes", "no"] + \
     [f"{size} {way}" for size in ("move", "a little") for way in ("left", "right", "toward me", "away from me")]
 COMMAND_TOOL = {"toolSpec": {
     "name": "robot_command",
     "description": "Send one command to the robot arm the person controls.",
     "inputSchema": {"json": json.dumps({"type": "object", "required": ["command"], "properties": {   # a string: Sonic
         "command": {"type": "string", "enum": COMMANDS, "description": "the command closest to what they asked"}}})}}}
+FETCH_TOOL = {"toolSpec": {
+    "name": "fetch_object",
+    "description": "Find a named object on the table with the camera and bring it to the person (they confirm first).",
+    "inputSchema": {"json": json.dumps({"type": "object", "required": ["what"], "properties": {
+        "what": {"type": "string", "description": "the object, in their words, e.g. 'the banana' or 'my pills'"}}})}}}
 COMMAND_PROMPT = (
     "You are the voice of EyeReach, a robot arm for a person who cannot move their arms. When they ask the arm to "
     "do something, call robot_command with the closest command, one per call. For example: 'grab that' or 'pick "
     "it up' is grab; 'drop it' or 'let it go' is release; 'go left' is move left; 'a bit to the left' or 'a "
     "tiny bit left' is a little left; 'closer to me' is move toward me; 'wait' or 'hold on' is stop; 'keep "
     "going' is resume; 'talk to you instead' or 'use my voice' is use voice; 'use my eyes' is use vision. "
-    "Left and right are as the person sees it. If you are not sure what they mean, ask one short question "
-    "instead of guessing. Do not call the tool for small talk. After a command, reply in at most five words, "
-    "like 'Okay, a little left.' The arm may still refuse, so never say it is done. Never say the word robot.")
+    "Left and right are as the person sees it. When they ask for a named thing ('bring me the banana', 'get my "
+    "pills', 'grab me a banana'), call fetch_object with it instead; 'grab it' or 'grab that' without a name is "
+    "grab. When the screen asks them to confirm an object, 'yes', 'that's it' or 'correct' is yes, and 'no' or "
+    "'not that one' is no. If you are not sure what they mean, ask one short question "
+    "instead of guessing. Do not call the tool for small talk. After a tool call, reply in at most five words "
+    "with what is about to happen, like 'Okay, a little left.', 'Okay, grabbing.' or 'Looking for the banana.' "
+    "Nothing has happened yet when you reply: never say found, grabbed, done, moved or confirmed. "
+    "Never say the word robot.")
 
 
 def event(name, **body):
@@ -260,6 +270,9 @@ def speak_lines(speaker=None, lines=sys.stdin):
 def command_out(heard):
     """on_tool for --commands: one JSON line on stdout for the eye app."""
     def on_tool(name, arguments):
+        if name == "fetch_object" and str(arguments.get("what", "")).strip():
+            print(json.dumps({"task": f"bring me {arguments['what'].strip()}", "heard": heard[0]}), flush=True)
+            return {"status": "looking for it; the person will be asked to confirm"}
         command = arguments.get("command")
         if name != "robot_command" or command not in COMMANDS:
             return {"status": "unknown command"}
@@ -285,7 +298,8 @@ async def talk(microphone=None, speaker=None, commands=False):
             if line.startswith("You:"):
                 heard[0] = line[4:].strip()
             print(line, file=sys.stderr, flush=True)
-        session = SonicSession(system=COMMAND_PROMPT, on_text=on_text, tools=[COMMAND_TOOL], on_tool=command_out(heard))
+        session = SonicSession(system=COMMAND_PROMPT, on_text=on_text, tools=[COMMAND_TOOL, FETCH_TOOL],
+                               on_tool=command_out(heard))
     else:
         session = SonicSession()
     await session.start()

@@ -4,6 +4,7 @@
 
 import math
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -32,10 +33,34 @@ class FetchTest(unittest.TestCase):
         self.assertFalse(robot.closed)                            # and let go
         self.assertAlmostEqual(gz, 120.0, delta=5)                # back up at the travel height
 
-    def test_missed_grab_says_so(self):
+    def test_the_grip_guess_is_not_trusted(self):
+        # on the real arm the gripper said "nothing" even when it held the object: carry it anyway
         robot = pretend_arm(holds=False)
-        self.assertIn("missed", fetch.fetch(robot, *arm_link.area_to_point(0.5, 0.5)))
-        self.assertFalse(robot.closed)
+        self.assertIsNone(fetch.fetch(robot, *arm_link.area_to_point(0.5, 0.5)))
+
+    def test_stop_ends_it(self):
+        robot = pretend_arm()
+        job = fetch.FetchJob(robot, *arm_link.area_to_point(0.3, 0.6))
+        for _ in range(400):                       # until it is down at the object
+            robot.update()
+            if job.step() or (job.stage and job.stage[1] == "grab" and job.started):
+                break
+            time.sleep(0.01)
+        robot.halt()                                 # STOP
+        while not job.step():
+            robot.update()
+        self.assertEqual(job.why, "stopped")
+        self.assertFalse(robot.busy())
+
+    def test_stop_while_gliding(self):
+        robot = pretend_arm()
+        job = fetch.FetchJob(robot, *arm_link.area_to_point(0.1, 0.1))
+        for _ in range(5):
+            robot.update()
+            job.step()
+        robot.halt()
+        self.assertTrue(job.step())
+        self.assertEqual(job.why, "stopped")
 
     def test_out_of_reach(self):
         self.assertIn("outside", fetch.fetch(pretend_arm(), 400.0, 0.0))

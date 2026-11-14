@@ -18,6 +18,7 @@ Helper keys: Esc close, C calibrate again, Space pause (the arm holds still), V 
 """
 
 import argparse
+import json
 import math
 import shutil
 import subprocess
@@ -30,6 +31,7 @@ import numpy as np
 
 from eyereach import eye_control, speaker_volume
 from eyereach.head_tilt import DEAD, NOSE_DEPTH, REACH, STEADY, HeadTilt, nose_angles
+from eyereach.agent_link import AgentLink, run_agent_messages
 from eyereach.session_log import SessionLog
 from eyereach.voice_commands import AGENT_PYTHON, BothInputs, MODEL, REPO, SonicInput, VoiceInput, needs_voice_mode
 from eyereach.gaze_webcam import Camera, GazeMap, IrisGaze, OneEuro, camera_view, in_view
@@ -716,6 +718,10 @@ def main():
                         help="speak with Amazon Nova 2 Sonic (needs ~/eyereach_agent_venv and AWS keys)")
     parser.add_argument("--sonic", action="store_true",
                         help="with --voice: also understand free speech with Amazon Nova 2 Sonic (STOP stays offline)")
+    parser.add_argument("--table-camera",
+                        help="a second camera looking down at the table (/dev/video2, 2 or a stream address): say "
+                             "'bring me the banana' and the task agent finds it with Nova and the arm brings it "
+                             "(needs --voice and --sonic, and the table calibration: launch/eyereach.sh --agent calibrate)")
     parser.add_argument("--grab-mm", type=float, default=eye_control.GRAB_MM,
                         help=f"fingertips this high above the table when picking up (default {eye_control.GRAB_MM:.0f}, "
                              f"never below {eye_control.LOWEST_GRAB_MM:.0f})")
@@ -789,6 +795,24 @@ def main():
             if args.sonic:
                 listener = BothInputs(listener, SonicInput().start())
             voice.listener = listener                  # it stops listening while the app talks
+            ctl.auto_mode = True                       # speaking stops the face from moving the arm; quiet, it's back
+        agent, to_job = None, None
+        if args.table_camera:
+            import fetch                               # brain/fetch.py (brain/ is on the path through eye_control)
+            grab = max(args.grab_mm, eye_control.LOWEST_GRAB_MM)
+            if not (args.voice and args.sonic):
+                print("Task agent: off (it needs voice commands and Nova 2 Sonic, for 'bring me the banana').")
+            elif fetch.CALIBRATION.exists():
+                matrix = json.loads(fetch.CALIBRATION.read_text())["matrix"]
+                to_job = lambda u, v: fetch.FetchJob(robot, *fetch.to_table(matrix, u, v), grab)   # noqa: E731
+            elif not args.real:                        # the pretend arm: the picture is the play area itself
+                to_job = lambda u, v: fetch.FetchJob(robot, *eye_control.arm_link.area_to_point(u, v), grab)  # noqa: E731
+            else:
+                print(f"Task agent: off. Calibrate the table camera once first: "
+                      f"launch/eyereach.sh --agent calibrate --camera {args.table_camera}")
+            if to_job:
+                agent = AgentLink(args.table_camera).start()
+                print("Task agent: on. Say 'bring me the banana'.")
         microphone_failed = False
         clicks = []
 
@@ -894,6 +918,8 @@ def main():
                             double = False
                             break  # never execute a batch of old commands
 
+            if agent:
+                run_agent_messages(agent, ctl, to_job, now)
             if clicks:
                 name = clicks.pop(0)
                 clicks.clear()
@@ -968,6 +994,8 @@ def main():
     finally:
         if listener:
             listener.close()
+        if agent:
+            agent.close()
         if voice.sonic is not None:
             voice.sonic.terminate()
         log.close()

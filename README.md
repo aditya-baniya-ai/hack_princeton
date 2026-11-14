@@ -389,8 +389,26 @@ launch/eyereach.sh --agent calibrate --camera /dev/video2               # once (
 launch/eyereach.sh --agent "grab me a banana" --camera /dev/video2      # add --sim or --no-arm to try it first
 ```
 
-The person answers y/n in the terminal for now (not with the eyes). If the gripper closes on nothing it says so. For
-flat things like a banana, try `--grab-mm 30` (the fingertips close 50 mm above the table by default).
+On its own like this, the person answers y/n in the terminal. For flat things like a banana, try `--grab-mm 30` (the
+fingertips close 50 mm above the table by default). The gripper's guess at whether it holds something is not trusted
+(on the real arm it said "nothing" while holding the object), so the arm always carries on to the person.
+
+### Both at once: face control, voice, and the agent (two cameras)
+
+One camera sees the face (the C920, or a laptop streaming its webcam), the other looks down at the table. Set
+`TABLE_CAMERA=/dev/video2` at the top of `launch/eyereach.sh` (or add `--table-camera /dev/video2`), calibrate the
+table camera once (above), then run `launch/eyereach.sh` as usual. It needs voice commands and Nova 2 Sonic on.
+
+- **The face moves the arm** while nobody is talking.
+- **Speaking takes over:** any spoken arm command ("move it a bit to the left", "Robot grab", "bring me the
+  banana") switches to voice, and the face stops moving the arm. After 8 quiet seconds (`VOICE_IDLE` in
+  `eyereach/eye_control.py`) the face controls the arm again, straight away. STOP is never undone by waiting.
+- **"Bring me the banana"** (any named thing): Sonic hands it to the task agent, which takes a picture with the table
+  camera, asks Nova which object it is, and asks on screen and out loud "Is it the banana? Say yes or no". On yes,
+  the app's own arm glides there, grabs it, carries it to the person and lets go, one step per frame, so the camera,
+  the gaze STOP button and voice STOP keep working the whole time. STOP during a question counts as no.
+- The agent runs as its own program (`eyereach/agent_link.py` starts `agent.task_agent --serve` in the Python 3.12
+  environment); the app keeps the arm and only answers its questions.
 
 ### Measuring it (accuracy and grab times)
 

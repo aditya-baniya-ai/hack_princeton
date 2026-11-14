@@ -4,6 +4,7 @@
     python3 -m agent.task_agent "bring me the snack" --photo desk.jpg the objects come from Nova (#5)
     python3 -m agent.task_agent "grab me a banana" --camera 2 --arm real   Nova + the real arm
     launch/eyereach.sh --agent "grab me a banana" --camera 2         the same, and it starts the arm first
+    python3 -m agent.task_agent --serve --camera 2                    inside the eye app (it starts this itself)
 
 Built with LangChain deepagents:
     - a perception sub-agent that finds the objects (list_objects),
@@ -26,6 +27,7 @@ Environment variables:
 """
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -178,6 +180,54 @@ def fetch_with(arm, *extra):
     return fetch
 
 
+def serve(camera=None, model=None, notes_dir=NOTES_DIR, lines=sys.stdin, out=None, objects=None):
+    """Inside the eye app, which owns the arm and the screen. One JSON object per line both ways:
+        app -> agent   {"task": "bring me the banana"}, then {"answer": true} and {"result": null or "why not"}
+        agent -> app   {"status": "ready"}, {"confirm": "banana"}, {"pick": {"name", "u", "v"}},
+                       {"caregiver": "..."}, {"reply": "..."} (the task is over)
+    Each task takes a new picture with the table camera (objects: a fixed table instead, for tests)."""
+    out = out or sys.stdout
+    sys.stdout = sys.stderr                               # stray prints must not reach the app
+
+    def send(**message):
+        print(json.dumps(message), file=out, flush=True)
+
+    def wait_for(key):
+        for line in lines:
+            try:
+                message = json.loads(line)
+            except ValueError:
+                continue
+            if key in message:
+                return message[key]
+        raise SystemExit(0)                               # the app closed
+
+    def confirm(name):
+        send(confirm=name)
+        return bool(wait_for("answer"))
+
+    def arm(spot):
+        send(pick=spot)
+        return wait_for("result")
+
+    send(status="ready")
+    for line in lines:
+        try:
+            task = json.loads(line).get("task")
+        except (ValueError, AttributeError):
+            continue
+        if not task:
+            continue
+        try:
+            kwargs = dict(confirm=confirm, notify=lambda text: send(caregiver=text), arm=arm)
+            robot = Robot(objects, **kwargs) if objects is not None else Robot.from_camera(camera, **kwargs)
+            send(reply=run(task, robot, model, notes_dir))
+        except SystemExit as error:                       # no picture, say
+            send(reply=f"I could not do that: {error}")
+        except Exception as error:                        # Bedrock refused, the network is down, ...
+            send(reply=f"I could not do that: {type(error).__name__}: {error}")
+
+
 def default_model():
     from langchain.chat_models import init_chat_model
     return init_chat_model(f"bedrock_converse:{MODEL}", region_name=REGION, temperature=0)
@@ -216,13 +266,20 @@ def run(task, robot, model=None, notes_dir=NOTES_DIR):
 
 def main():
     parser = argparse.ArgumentParser(description="Run the task agent.")
-    parser.add_argument("task", help='for example "bring me the pills"')
+    parser.add_argument("task", nargs="?", help='for example "bring me the pills"')
+    parser.add_argument("--serve", action="store_true", help="inside the eye app: tasks come as JSON lines on stdin")
     parser.add_argument("--photo", help="take the objects from this photo with Nova instead of the pretend table")
     parser.add_argument("--camera", help="take a picture with this table camera (/dev/video2 or 2) for Nova")
     parser.add_argument("--arm", choices=["real", "virtual"], help="move an arm when picking (default: pretend)")
     parser.add_argument("--grab-mm", default="50", help="passed to brain/fetch.py")
     parser.add_argument("--travel-mm", default="120", help="passed to brain/fetch.py")
     args = parser.parse_args()
+    if args.serve:
+        if not args.camera:
+            sys.exit("--serve needs --camera (the table camera)")
+        return serve(args.camera)
+    if not args.task:
+        parser.error("give a task, for example \"bring me the pills\"")
     if args.arm == "real" and not (args.camera or args.photo):
         sys.exit("--arm real needs --camera (or --photo from the calibrated table camera)")
     arm = fetch_with(args.arm, "--grab-mm", args.grab_mm, "--travel-mm", args.travel_mm) if args.arm else None

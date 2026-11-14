@@ -36,56 +36,86 @@ def to_table(matrix, u, v):
     return x / w, y / w
 
 
-def wait(robot, seconds=20.0):
-    """Let a grab or release finish -> None, or what went wrong."""
-    end = time.monotonic() + seconds
-    while robot.busy():
+class FetchJob:
+    """Grab what is at (x, y) and put it down next to the person, one step() per frame, so the eye app's loop
+    (camera, buttons, STOP) keeps running. The caller calls robot.update() every frame; robot.halt() (STOP)
+    just ends it: the next step() reports it. step() -> False while working, True when finished; then
+    self.why is None (put down next to the person) or what went wrong."""
+
+    GLIDE_SECONDS, ACTION_SECONDS = 15.0, 20.0
+
+    def __init__(self, robot, x, y, grab_mm=GRAB_MM, drop=DROP_AREA):
+        self.robot, self.grab_mm, self.why = robot, grab_mm, None
+        self.plan = [("glide", (x, y)), ("down", "grab"), ("glide", arm_link.area_to_point(*drop)), ("down", "release")]
+        self.stage, self.deadline, self.started = None, 0.0, False
+        robot.stage = "Fetching"                          # robot.halt() (STOP) changes it to "Stopped"
+        u, v = arm_link.point_to_area(x, y)
+        if not (0 <= u <= 1 and 0 <= v <= 1):
+            self.why = f"that spot ({x:.0f}, {y:.0f} mm) is outside the arm's reach"
+
+    def finish(self, why=None):
+        self.why, self.plan, self.stage = why, [], None
+        self.robot.carrying(False)
+        return True
+
+    def step(self):
+        r = self.robot
+        if self.why:
+            return True
+        if r.error:
+            return self.finish(r.error)
+        if r.stage == "Stopped":
+            return self.finish("stopped")
+        now = time.monotonic()
+        if self.stage is None:                            # start the next part of the plan
+            if not self.plan:
+                return True
+            self.stage = self.plan.pop(0)
+            self.deadline = now + (self.GLIDE_SECONDS if self.stage[0] == "glide" else self.ACTION_SECONDS)
+            self.started = False
+        kind, what = self.stage
+        if now > self.deadline:
+            r.halt()
+            return self.finish("the arm could not get there in time" if kind == "glide" else "the arm took too long")
+        if kind == "glide":
+            x, y = what
+            u, v = arm_link.point_to_area(x, y)
+            r.follow(u, v)
+            arrived = r.aim is not None and math.hypot(r.aim[0] - x, r.aim[1] - y) < 1.0
+            if arrived and max(abs(c - j) for c, j in zip(r.command, r.joints())) < 0.03:
+                self.stage = None
+        elif not self.started:
+            if r.busy():
+                return False
+            ok = r.grab(self.grab_mm) if what == "grab" else r.release(self.grab_mm)
+            if not ok:
+                return self.finish(r.error or "the arm could not reach down there")
+            self.started = True
+        elif not r.busy():
+            # the gripper's guess at whether it holds something is wrong on the real arm, so it isn't trusted
+            r.carrying(what == "grab")
+            self.stage = None
+        return not self.plan and self.stage is None
+
+
+def fetch(robot, x, y, grab_mm=GRAB_MM):
+    """FetchJob to the end, on its own (brain/fetch.py go) -> None, or what went wrong."""
+    job = FetchJob(robot, x, y, grab_mm)
+    while not job.step():
         robot.update()
-        if robot.error or time.monotonic() > end:
-            robot.halt()
-            return robot.error or "the arm took too long"
         time.sleep(0.02)
-    return robot.error
+    return job.why
 
 
 def glide(robot, x, y, seconds=15.0):
     """Slide at the travel height until the gripper is over (x, y) -> None, or what went wrong."""
-    u, v = arm_link.point_to_area(x, y)
-    if not (0 <= u <= 1 and 0 <= v <= 1):
-        return f"that spot ({x:.0f}, {y:.0f} mm) is outside the arm's reach"
-    end = time.monotonic() + seconds
-    while time.monotonic() < end:
+    job = FetchJob(robot, x, y)
+    job.plan = job.plan[:1]
+    job.GLIDE_SECONDS = seconds
+    while not job.step():
         robot.update()
-        if robot.error:
-            return robot.error
-        robot.follow(u, v)
-        arrived = math.hypot(robot.aim[0] - x, robot.aim[1] - y) < 1.0 if robot.aim else False
-        if arrived and max(abs(c - j) for c, j in zip(robot.command, robot.joints())) < 0.03:
-            return None
         time.sleep(0.02)
-    robot.halt()
-    return "the arm could not get there in time"
-
-
-def fetch(robot, x, y, grab_mm=GRAB_MM):
-    """Grab what is at (x, y) and put it down next to the person -> None, or what went wrong."""
-    why = glide(robot, x, y)
-    if why:
-        return why
-    if not robot.grab(grab_mm):
-        return robot.error or "the arm could not reach down there"
-    why = wait(robot)
-    if why:
-        return why
-    if not robot.holding():
-        robot.release_here()
-        wait(robot)
-        return "missed: the gripper closed on nothing"
-    robot.carrying(True)
-    why = glide(robot, *arm_link.area_to_point(*DROP_AREA)) or \
-        (None if robot.release(grab_mm) else robot.error or "could not lower to let go") or wait(robot)
-    robot.carrying(False)
-    return why
+    return job.why
 
 
 def calibrate(robot, camera):
@@ -150,8 +180,6 @@ def main():
     robot.hover = max(args.travel_mm, grab_mm + 10)
     why = robot.start()
     if not why:
-        if args.virtual:
-            robot.held = True                               # the pretend gripper always catches something
         try:
             why = calibrate(robot, args.camera) if args.action == "calibrate" else fetch(robot, x, y, grab_mm)
         finally:

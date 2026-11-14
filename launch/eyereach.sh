@@ -24,6 +24,9 @@ TRAVEL_MM=120   # fingertips this high above the table (mm) at start-up and whil
 GRAB_MM=50      # fingertips this high above the table (mm) when picking up (the app never goes below 30)
 REUSE=true      # reuse the saved calibration (the first run, or a new screen size, still calibrates);
                 # recalibrate any time with FIX MY AIM or C in the app, or start with --calibrate
+TABLE_CAMERA="" # a second camera looking down at the table (e.g. /dev/video2): then saying "bring me the banana"
+                # has the task agent find it with Nova and the arm bring it (calibrate once: --agent calibrate
+                # --camera /dev/video2). Empty = off; --table-camera /dev/video2 sets it for one run
 # -------------------------------------
 
 set -m   # the arm runs in its own process group, so it can be stopped cleanly
@@ -33,7 +36,8 @@ SIM=false
 NO_ARM=false
 AGENT_TASK=""
 NEXT_IS_TASK=false
-APP_ARGS=(--travel-mm "$TRAVEL_MM" --grab-mm "$GRAB_MM")   # given first, so options typed after win
+APP_ARGS=(--travel-mm "$TRAVEL_MM" --grab-mm "$GRAB_MM")
+[ -n "$TABLE_CAMERA" ] && APP_ARGS+=(--table-camera "$TABLE_CAMERA")   # given first, so options typed after win
 for arg in "$@"; do
   if [ "$NEXT_IS_TASK" = true ]; then AGENT_TASK="$arg"; NEXT_IS_TASK=false; continue; fi
   case "$arg" in
