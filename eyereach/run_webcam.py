@@ -480,24 +480,32 @@ class Voice:
     can't take its own voice for a command: with spd-say until 0.3 s after the speech really ends; with Sonic (which
     doesn't say when it's done) for about as long as the sentence takes."""
 
-    def __init__(self, on=True, sonic=False):
+    def __init__(self, on=True, sonic=False, speech="necessary", max_seconds=3.0):
+        self.mode, self.max_seconds = speech, max_seconds
         self.sonic = None
-        if on and sonic and AGENT_PYTHON.exists():
+        if on and speech != "off" and sonic and AGENT_PYTHON.exists():
             try:
-                self.sonic = subprocess.Popen([str(AGENT_PYTHON), "-u", "-m", "agent.voice_sonic", "--speak"],
+                self.sonic = subprocess.Popen([str(AGENT_PYTHON), "-u", "-m", "agent.voice_sonic", "--speak",
+                                               "--speech-max-seconds", str(max_seconds)],
                                               preexec_fn=die_with_parent,
                                               cwd=REPO, stdin=subprocess.PIPE, text=True)
             except OSError:
                 pass
-        self.on = on and (self.sonic is not None or shutil.which("spd-say") is not None)
-        self.last = None
+        self.on = on and speech != "off" and (self.sonic is not None or shutil.which("spd-say") is not None)
+        self.last, self.last_at = None, -math.inf
         self.listener = None       # the VoiceInput to mute while speaking (set by the app)
         self.speech = 0            # counts sentences, so an old one finishing doesn't unmute a newer one
 
-    def say(self, sentence):
-        if not self.on or not sentence or sentence == self.last:
-            return
-        self.last = sentence
+    def say(self, sentence, necessary=False):
+        if not self.on or not sentence or (self.mode == "necessary" and not necessary):
+            return False
+        sentence = short_speech(sentence)
+        now = time.monotonic()
+        if sentence == self.last and now - self.last_at < 10.0:
+            return False
+        if not necessary and now - self.last_at < self.max_seconds + 1.0:
+            return False
+        self.last, self.last_at = sentence, now
         self.speech += 1
         mine = self.speech
         if self.sonic is not None and self.sonic.poll() is None:
@@ -505,26 +513,29 @@ class Voice:
                 self.sonic.stdin.write(" ".join(sentence.split()) + "\n")
                 self.sonic.stdin.flush()
                 if self.listener is not None:             # about as long as Sonic takes to make it and say it
-                    self.listener.mute_until = time.monotonic() + 1.0 + len(sentence.split()) / 2.3
-                return
+                    self.listener.mute_until = time.monotonic() + 1.0 + self.max_seconds
+                return True
             except OSError:
                 self.sonic = None                             # Sonic stopped: spd-say from now on
         if shutil.which("spd-say") is None:
-            return
+            return False
         if self.listener is not None:
-            self.listener.mute_until = time.monotonic() + 30.0          # until the speech is done (see below)
+            self.listener.mute_until = time.monotonic() + self.max_seconds + 0.3          # until the speech is done (see below)
         quiet = dict(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.Popen(["spd-say", "-C"], **quiet).wait()                # stop the last sentence
         proc = subprocess.Popen(["spd-say", "-w", "-r", "-25", sentence], **quiet)   # -w: exits when spoken
 
         def unmute():
             try:
-                proc.wait(timeout=30)
+                proc.wait(timeout=self.max_seconds)
             except subprocess.TimeoutExpired:
-                pass
+                proc.terminate()
+                if mine == self.speech:
+                    subprocess.Popen(["spd-say", "-C"], **quiet).wait()
             if self.listener is not None and mine == self.speech:
                 self.listener.mute_until = time.monotonic() + 0.3
         threading.Thread(target=unmute, daemon=True).start()
+        return True
 
 
 # ---- calibration ---------------------------------------------------------------------------------
@@ -555,8 +566,7 @@ def welcome(camera, gaze, shown, voice, again=False):
         size = (int(0.5 * H * 4 / 3), int(0.5 * H))
     seen_since, lost_since = None, time.monotonic()
     title = "Let's fix your aim." if again else "Hello!"
-    voice.say(("Let's fix your aim. " if again else "Hello. First I need to learn where you are pointing. ") +
-              tell_voice)
+    voice.say("Follow the yellow dot.", necessary=True)
     while True:
         frame, f = look(camera, gaze)
         now = time.monotonic()
@@ -576,7 +586,7 @@ def welcome(camera, gaze, shown, voice, again=False):
             centered(canvas, "Helper: move the camera so the face is in the middle of the picture.",
                      W // 2, below + scale(36), 0.65)
             if now - lost_since > 4:
-                voice.say("I can't see your face. Please look at the screen.")
+                voice.say("Look at the screen, please.", necessary=True)
         else:
             left = 3 - (now - seen_since)
             if left <= 0:
@@ -639,7 +649,7 @@ def short_speech(text, limit=SPEECH_LIMIT):
     first = re.split(r"(?<=[.!?])\s", text, maxsplit=1)[0]
     if len(first) <= limit:
         return first
-    cut = first[:limit].rsplit(" ", 1)[0].rstrip(",;:")
+    cut = first[:limit - 1].rsplit(" ", 1)[0].rstrip(",;:")
     return cut + "."
 
 
@@ -748,7 +758,7 @@ def follow_the_dot(camera, gaze, shown, voice, seconds):
                 centered(canvas, "I can't see your face. Look at the yellow dot.", W // 2, H // 2 - scale(20),
                          0.9, RED, 2)
                 if now - lost_since > 4:
-                    voice.say("I can't see your face. Please look at the yellow dot.")
+                    voice.say("Look at the yellow dot, please.", necessary=True)
             bar, tall = int(0.3 * W), int(scale(8))                    # how far along it is
             x0, y0 = (W - bar) // 2, int(H / 2 + scale(20))
             cv2.rectangle(canvas, (x0, y0), (x0 + bar, y0 + tall), (60, 48, 48), -1)
@@ -793,7 +803,7 @@ def calibrate(camera, gaze, shown, voice=None, seconds=DOT_SECONDS, again=False,
         canvas = blank()
         centered(canvas, "Almost. Let's do that once more.", W // 2, H // 2, 1.3, GOLD, 2)
         shown(canvas)
-        voice.say("Almost. Let's do that once more.")
+        voice.say("Please follow the dot again.", necessary=True)
         if wait(2.5):
             return None
     canvas = blank()
@@ -801,7 +811,7 @@ def calibrate(camera, gaze, shown, voice=None, seconds=DOT_SECONDS, again=False,
     centered(canvas, "Eyes and mouth open to move slowly. Close mouth to pick up or release.", W // 2,
              0.54 * H, 0.9, WHITE, 2)
     shown(canvas)
-    voice.say("All set. Eyes and mouth open to move slowly. Close mouth to pick up or release.")
+    voice.say("Calibration done.", necessary=True)
     return None if wait(3.0) else (gmap, error)
 
 
@@ -830,7 +840,11 @@ def main():
     parser.add_argument("--voice-model", type=Path, default=MODEL, help="local Vosk model folder")
     parser.add_argument("--microphone", help="input device index or name (default: system input)")
     parser.add_argument("--list-microphones", action="store_true", help="list input devices and exit")
-    parser.add_argument("--quiet", action="store_true", help="no voice")
+    parser.add_argument("--quiet", action="store_true", help="no spoken output (voice commands still work)")
+    parser.add_argument("--speech", choices=("necessary", "all", "off"), default="necessary",
+                        help="necessary (default): only questions, mode changes, completion and errors; all: routine replies too")
+    parser.add_argument("--speech-max-seconds", type=float, default=3.0,
+                        help="cut each spoken prompt off after this many seconds (0.5 to 10, default 3)")
     parser.add_argument("--sonic-voice", action="store_true",
                         help="speak with Amazon Nova 2 Sonic (needs ~/eyereach_agent_venv and AWS keys)")
     parser.add_argument("--sonic", action="store_true",
@@ -861,7 +875,8 @@ def main():
     size = None if args.windowed else screen_size()
     if size:
         set_size(*size)
-    camera, gaze, voice = Camera(args.camera), IrisGaze(args.pointer), Voice(on=not args.quiet, sonic=args.sonic_voice)
+    camera, gaze, voice = Camera(args.camera), IrisGaze(args.pointer), Voice(on=not args.quiet, sonic=args.sonic_voice,
+                                                                          speech=args.speech, max_seconds=args.speech_max_seconds)
     cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL | cv2.WINDOW_FREERATIO)
     cv2.resizeWindow(WINDOW, W, H)
     if not args.windowed:
@@ -1035,7 +1050,7 @@ def main():
                 and ctl.phase in ("waiting", "there", "following", "moving")
                 and not (ctl.task_running or ctl.question or ctl.wants_task))
             voice_acted = False
-            spoken = None
+            spoken, spoken_necessary = None, False
             if listener:
                 ctl.voice_available = listener.status == "Listening" and not listener.error
                 ctl.microphone_status = listener.error or listener.status
@@ -1050,7 +1065,7 @@ def main():
                 # STOP wins over every other recognized action in this batch.
                 if any(event.action == "stop" for event in events):
                     ctl.voice("stop", now)
-                    spoken = confirmation("stop")
+                    spoken, spoken_necessary = confirmation("stop"), True
                     ctl.heard_command = "stop - accepted"
                     voice_acted = True
                     clicks.clear()
@@ -1068,6 +1083,7 @@ def main():
                         accepted = ctl.voice(event.action, now, event.started, event.heard)
                         if accepted:
                             spoken = confirmation(event.action)
+                            spoken_necessary = event.action in ("voice", "vision", "resume")
                         ctl.heard_command = event.text + (" - accepted" if accepted else " - ignored")
                         log.event("voice command", text=event.text, accepted=accepted)
                         if accepted:
@@ -1100,19 +1116,28 @@ def main():
             for name, details in ctl.events:
                 log.event(name, **details)
                 if name == "task done" and details.get("reply"):   # the task agent's answer is worth saying too
-                    spoken = details["reply"]
+                    spoken, spoken_necessary = details["reply"], True
+                elif name == "arm fault":
+                    spoken, spoken_necessary = "Arm stopped. Check the screen.", True
+                elif name == "stop":
+                    spoken, spoken_necessary = "Stopped.", True
+                elif name == "control mode":
+                    spoken, spoken_necessary = f"{details['mode'].title()} mode.", True
+                elif name == "fetched":
+                    spoken, spoken_necessary = ("Could not finish. Check the screen." if details.get("problem") else "Done."), True
             ctl.events = []
             lost_since = None if tracking or not face_on else (lost_since or now)   # voice mode isn't "lost"
             lost = lost_since is not None and now - lost_since > 0.7     # not just a blink
-            # speech: only in voice mode, only after something was done, and only a few words
+            # Essential prompts can speak in either mode; routine replies follow the selected speech option.
             if ctl.question and ctl.question != asked:
                 spoken, asked = f"Is it {ctl.question}?", ctl.question
+                spoken_necessary = True
             elif not ctl.question:
                 asked = None
-            if ctl.control_mode == "voice" and not paused and spoken:   # only after a command: nothing else
+            if spoken and (spoken_necessary or (ctl.control_mode == "voice" and not paused)):
                 line = short_speech(spoken)
-                voice.say(line)
-                log.event("said", text=line)
+                if voice.say(line, necessary=spoken_necessary):
+                    log.event("said", text=line)
             ctl.say, spoken = [], None
             face = face_panel(frame, gaze, f is not None, view_size) if view_on else None
             face_note = ""

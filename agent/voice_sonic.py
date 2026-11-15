@@ -214,7 +214,7 @@ class SonicSession:
             self.finished.set()
 
 
-async def reply_pcm(words, system=SYSTEM_PROMPT, timeout=30.0):
+async def reply_pcm(words, system=SYSTEM_PROMPT, timeout=30.0, max_audio_seconds=None):
     """Send one typed sentence -> Sonic's spoken reply (16-bit mono PCM at OUT_RATE)."""
     session = SonicSession(system=system, on_text=lambda text: None)
     await session.start()
@@ -227,9 +227,17 @@ async def reply_pcm(words, system=SYSTEM_PROMPT, timeout=30.0):
             await asyncio.sleep(CHUNK / IN_RATE)
     quiet = asyncio.create_task(silence())
     chunks, end = [], time.monotonic() + timeout
+    limit = None if max_audio_seconds is None else int(max_audio_seconds * OUT_RATE) * 2
+    received = 0
     while time.monotonic() < end and not (session.finished.is_set() and session.audio_out.empty()):
         try:
-            chunks.append(await asyncio.wait_for(session.audio_out.get(), 0.5))
+            chunk = await asyncio.wait_for(session.audio_out.get(), 0.5)
+            if limit is not None:
+                chunk = chunk[:max(0, limit - received)]
+            chunks.append(chunk)
+            received += len(chunk)
+            if limit is not None and received >= limit:
+                break
         except asyncio.TimeoutError:
             if chunks and session.audio_out.empty() and session.finished.is_set():
                 break
@@ -249,7 +257,7 @@ async def say_text(words, out_path, timeout=30.0):
     return len(pcm) / (2 * OUT_RATE)
 
 
-def speak_lines(speaker=None, lines=sys.stdin):
+def speak_lines(speaker=None, lines=sys.stdin, max_seconds=3.0):
     """The eye app's voice: read each line from stdin aloud with Sonic. While one sentence is being made,
     newer ones replace older ones (only the latest instruction matters)."""
     import queue
@@ -269,7 +277,8 @@ def speak_lines(speaker=None, lines=sys.stdin):
         if not sentence:
             continue
         try:
-            pcm = asyncio.run(reply_pcm(sentence, READ_ALOUD_PROMPT))
+            pcm = asyncio.run(reply_pcm(sentence, READ_ALOUD_PROMPT, max_audio_seconds=max_seconds))
+            pcm = pcm[:int(max_seconds * OUT_RATE) * 2]  # hard audio cutoff, independent of model compliance
             with sd.RawOutputStream(samplerate=OUT_RATE, channels=1, dtype="int16", device=speaker) as out:
                 out.write(pcm)
         except Exception as error:                     # say why on stderr; the app keeps going without it
@@ -366,7 +375,11 @@ def main():
     parser.add_argument("--list", action="store_true", help="list audio devices and exit")
     parser.add_argument("--speak", action="store_true", help="read each line from stdin aloud (the eye app's voice)")
     parser.add_argument("--commands", action="store_true", help="free speech -> JSON commands on stdout (the eye app)")
+    parser.add_argument("--speech-max-seconds", type=float, default=3.0,
+                        help="--speak: maximum seconds of audio per prompt (0.5 to 10, default 3)")
     args = parser.parse_args()
+    if not 0.5 <= args.speech_max_seconds <= 10.0:
+        parser.error("--speech-max-seconds must be between 0.5 and 10")
     if args.list:
         import sounddevice as sd
         print(sd.query_devices())
@@ -375,7 +388,7 @@ def main():
         print("No AWS keys in the environment: load .env first (set -a; . ./.env; set +a).")
         return 1
     if args.speak:
-        speak_lines(device(args.speaker))
+        speak_lines(device(args.speaker), max_seconds=args.speech_max_seconds)
         return 0
     if args.text:
         seconds = asyncio.run(say_text(args.text, args.out))

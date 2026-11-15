@@ -17,6 +17,8 @@
 # Ctrl+C here) stops everything. On the real arm, hold it first: it goes limp when it starts and stops.
 
 # ---- settings: change them here ----
+SPEECH=necessary # necessary, all, or off: how much the robot says (listening stays on)
+SPEECH_MAX_SECONDS=3 # cut off each spoken prompt after this many seconds
 VOICE=true      # offline voice commands, used only once launch/setup_voice.sh is done; --no-voice turns off
 SONIC=true      # Amazon Nova 2 Sonic: its voice for the spoken prompts, and free speech ("a bit to the left")
                 # with the voice commands; used only with AWS keys in .env and ~/eyereach_agent_venv; --no-sonic turns off
@@ -40,7 +42,7 @@ SIM=false
 NO_ARM=false
 AGENT_TASK=""
 NEXT_IS_TASK=false
-APP_ARGS=(--travel-mm "$TRAVEL_MM" --grab-mm "$GRAB_MM")
+APP_ARGS=(--travel-mm "$TRAVEL_MM" --grab-mm "$GRAB_MM" --speech "$SPEECH" --speech-max-seconds "$SPEECH_MAX_SECONDS")
 [ -n "$FACE_CAMERA" ] && APP_ARGS+=(--camera "$FACE_CAMERA")     # given first, so --camera typed after wins
 [ -n "$TABLE_CAMERA" ] && APP_ARGS+=(--table-camera "$TABLE_CAMERA")   # given first, so options typed after win
 for arg in "$@"; do

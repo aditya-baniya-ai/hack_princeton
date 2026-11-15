@@ -173,8 +173,24 @@ No fixed phrases and no "robot" first: the app finds the key word anywhere in wh
 talk do nothing. (The old "Robot ..." phrases still work but are never needed.) Coming back to vision, "straight" is
 re-taken where the arm is, so it doesn't jump.
 
-**It talks very little:** only in voice mode, only after doing something, and at most 40 characters ("Left.", "Closer, a
-little.", "Picking up.", "Voice mode.", "Is it the banana?"). Vision mode is silent.
+**Necessary speech only (default):** the robot stays quiet for ordinary movement and grab/release
+acknowledgements. It speaks brief object-confirmation questions, mode changes, stop/error notices, task results,
+and essential calibration prompts. Every prompt is reduced to one short sentence (at most 40 characters),
+with an audio cutoff of **3 seconds** for both Amazon Nova 2 Sonic and the fallback voice. Repeated identical
+messages are suppressed for 10 seconds. On-screen instructions remain available.
+
+Change the speech option at launch:
+
+```bash
+./launch/eyereach.sh --speech necessary              # only essential prompts (default)
+./launch/eyereach.sh --speech off                    # silent; still listens to voice commands
+./launch/eyereach.sh --speech all                    # also short routine replies
+./launch/eyereach.sh --speech-max-seconds 2           # shorter audio cutoff
+```
+
+The launcher also has `SPEECH=necessary` and `SPEECH_MAX_SECONDS=3` near the top. The cutoff accepts
+0.5–10 seconds. `--quiet` remains an alias for silent spoken output. These options control the robot app's
+prompts; `launch/talk.sh` remains a separate conversation mode.
 
 **Who listens:** Amazon Nova 2 Sonic, when the AWS keys are there, writes down what you say, word for word, and the app
 finds the command in it (`voice_commands.understand`); Sonic doesn't answer back. The offline Vosk recogniser listens
