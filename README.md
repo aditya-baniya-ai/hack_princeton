@@ -1,4 +1,4 @@
-# aHandForMyAunty
+# aHandForMyAunt
 
 [![tests](https://github.com/aditya-baniya-ai/hack_princeton/actions/workflows/tests.yml/badge.svg)](https://github.com/aditya-baniya-ai/hack_princeton/actions/workflows/tests.yml)
 Every pull request and push to `main` runs all the tests on GitHub (`.github/workflows/tests.yml`).
@@ -6,7 +6,7 @@ Every pull request and push to `main` runs all the tests on GitHub (`.github/wor
 A hands-free assistive robotics prototype for people who have limited use of their arms and hands.
 **It tracks the person's eyes to control the robot**: with both eyes and the mouth open, the person steers an
 OpenMANIPULATOR-X. Eye tracking alone was jumpy, so we **added nose tracking for stability**: the arm follows
-the nose, which is far steadier than the irises. Closing the mouth starts a complete lower, grip and lift
+the nose and eyes, which is far steadier than the irises. Closing the mouth starts a complete lower, grip and lift
 sequence. When a park destination is saved, the arm automatically carries the object there, lowers, releases
 and lifts again. Voice offers a second control method, with Amazon Nova for natural speech and object
 understanding, and offline Vosk commands. **Everything works on the real arm, tested.**
@@ -16,7 +16,7 @@ integration around it: Jetson setup, OpenCR firmware configuration, ROS 2 contro
 computer vision, camera streaming, speech input/output, task planning, calibration and automated tests.
 
 Built at HackPrinceton Fall 2026 (Nov 13–15, 2026). The application package and saved configuration directories
-retain the internal name `eyereach`. This is a research prototype, not a medical device. We have not yet
+retain the internal name `aHandformyAunt`. This is a research prototype, not a medical device. We have not yet
 validated it with intended users who have disabilities.
 
 ## Why we built it
