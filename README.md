@@ -1,57 +1,197 @@
-# EyeReach
+# aHandForMyAunty
 
 [![tests](https://github.com/aditya-baniya-ai/hack_princeton/actions/workflows/tests.yml/badge.svg)](https://github.com/aditya-baniya-ai/hack_princeton/actions/workflows/tests.yml)
 Every pull request and push to `main` runs all the tests on GitHub (`.github/workflows/tests.yml`).
 
-A robot arm that a person with severe arm paralysis controls with their head: with eyes and mouth open, the arm follows
-their nose slowly. Closing the mouth picks something up and lifts it; the next mouth closure after steering releases it; or by voice: speaking takes over from the face, and a few quiet seconds
-give it back. Amazon Nova finds objects and talks back (Nova 2 Sonic is the app's voice and understands free speech);
-a LangChain deepagents task agent fetches things ("bring me the banana") with a second camera over the table.
+A hands-free assistive robotics prototype for people who have limited use of their arms and hands.
+**It tracks the person's eyes to control the robot**: with both eyes and the mouth open, the person steers an
+OpenMANIPULATOR-X. Eye tracking alone was jumpy, so we **added nose tracking for stability**: the arm follows
+the nose, which is far steadier than the irises. Closing the mouth starts a complete lower, grip and lift
+sequence. When a park destination is saved, the arm automatically carries the object there, lowers, releases
+and lifts again. Voice offers a second control method, with Amazon Nova for natural speech and object
+understanding, and offline Vosk commands. **Everything works on the real arm, tested.**
 
-Built at HackPrinceton Fall 2026 (Nov 13-15, 2026). This is a research prototype, not a medical
-device, and it has not been tested with people who have disabilities.
+The team bought the ROBOTIS OpenMANIPULATOR-X platform and built the assistive application and its
+integration around it: Jetson setup, OpenCR firmware configuration, ROS 2 control, robot kinematics,
+computer vision, camera streaming, speech input/output, task planning, calibration and automated tests.
+
+Built at HackPrinceton Fall 2026 (Nov 13–15, 2026). The application package and saved configuration directories
+retain the internal name `eyereach`. This is a research prototype, not a medical device. We have not yet
+validated it with intended users who have disabilities.
+
+## Why we built it
+
+Our teammate's aunt is paralyzed from the neck down and retains movement in her face, eyes and mouth.
+We started this project for her: a way to use that movement to retrieve an everyday object when another
+person is not immediately available to help. Our goal is to give her more control over small daily tasks.
+We have not yet tested the prototype with her, so this motivation is distinct from a demonstrated clinical outcome.
+
+We bought the OpenMANIPULATOR-X, a Jetson Orin, camera and speaker one day before the hackathon. The team
+reports that all device setup, firmware configuration, networking, application development and system
+integration happened during HackPrinceton. We used purchased hardware, upstream robotics packages and
+pretrained models to build and test the assistive system described below.
+
+## The build: purchased hardware to an assistive robotics system
+
+The engineering work spans the physical robot, embedded firmware, an on-device control application and
+cloud inference. Buying the arm gave us a mechanical platform. The team's contribution is the system
+that lets a person control it without touching a joystick or keyboard.
+
+### Hardware, firmware and Jetson bring-up
+
+| Layer | What we configured or built | Evidence in this repository |
+|---|---|---|
+| Robot platform | Purchased ROBOTIS OpenMANIPULATOR-X with DYNAMIXEL actuators and a gripper; integrated it into the assistive workflow | `brain/arm_link.py`, hardware setup below |
+| Embedded controller | Configured the OpenCR board through the Arduino toolchain, used `usb_to_dxl` for the ROS connection, and wrote a separate servo diagnostic/greeting sketch | `firmware/servo_check/servo_check.ino`, OpenCR setup instructions |
+| Jetson environment | Set up the Ubuntu/JetPack environment, USB permissions, ROS 2 Humble, ROBOTIS packages, colcon workspace and Python environments | `launch/setup_jetson.sh`, `dependencies.repos` |
+| Servo behavior | Tuned base gains, configured gripper current limiting, and added startup checks for joint/gripper turn counts | `launch/setup_jetson.sh`, `launch/fix_turns.py` |
+| Peripherals | Connected face/table cameras, microphone and speaker; selected audio devices and added speaker-volume controls | `eyereach/audio_devices.py`, `eyereach/speaker_volume.py` |
+| Networking and remote operation | Configured Wi-Fi/network access, SSH from the Mac and live video/display feedback for operation and debugging | Team setup workflow; camera implementation in `tools/laptop_camera.py` and `eyereach/gaze_webcam.py` |
+| Startup and recovery | Built a launcher that loads configuration, checks the arm, opens the gripper, finds the desktop and starts the application | `launch/eyereach.sh`, `launch/stop.sh` |
+
+The Mac is the development/operator computer; the Jetson runs the robot-facing application and ROS stack.
+There are two distinct video directions in the setup: the operator can view robot-side feedback on the Mac,
+and the repository's laptop-camera server sends the Mac webcam **to the Jetson** as an MJPEG stream for face
+tracking. A USB table camera on the Jetson provides the robot/object view. The stream reader keeps the newest
+frame rather than building a queue of old frames. SSH, a live camera stream and the remote desktop serve
+different purposes; the local robot controller does not run on the Mac.
+
+### Robotics: coordinates, inverse kinematics and feedback
+
+`brain/arm.py` contains our forward/inverse kinematics and geometric checks for the four arm joints.
+The application converts head direction or a bounded voice move into a target in millimetres, solves joint
+angles and checks the path before sending it to the controller. Its checks include joint ranges, reachable
+positions, table clearance and wrist clearance. Cartesian and joint-speed limits constrain movement.
+
+`brain/arm_link.py` separates the input method from the robot. `VirtualArm` runs the behavior without ROS or
+hardware. `RealArm` uses the ROS connection in `gestures/gestures.py`: joint trajectories go to the arm
+controller, gripper actions go to the gripper controller, and `/joint_states` reports measured joint angles.
+The application watches for stale feedback and failed/timed-out operations.
+
+Pickup is a state machine, not one blind close command: **open gripper, lower, close, lift**. Each stage waits
+for feedback before starting the next. A saved park destination adds **carry at travel height, lower,
+release, lift**. Park X/Y and release height persist in `~/.eyereach/park.json`; the app loads them automatically.
+STOP cancels a sequence and holds the current measured position. These are prototype control checks,
+not a claim of certified robot safety or comprehensive obstacle avoidance.
+
+### Computer vision: face landmarks to physical motion
+
+MediaPipe Face Mesh supplies pretrained face/eye landmarks from the face-camera image. We use those
+landmarks to calculate nose offset, head direction, individual eye openings and mouth opening, rather than
+training a new face model. Normalizing measurements by face/eye dimensions reduces sensitivity to camera
+distance. `eyereach/head_tilt.py` maps the head reading to movement; smoothing and a dead zone reduce jitter.
+`eyereach/eye_control.py` owns the input gate and pickup state, so landmark inference does not directly send
+motor commands.
+
+We track the eyes to control the robot, and we added the nose for stability. The eyes tell the system when
+the person wants to steer (both open) and, with `--pointer eyes`, can point at the table. Eye tracking alone
+jumped around, because an iris is only a few pixels wide in a webcam picture, so the default steering follows the
+**nose** (measured from the point between the eyes), which is much steadier.
+
+The current interaction is **eyes open + mouth open to steer**, then **mouth closure to pick up**.
+Opening the mouth alone does not grab. With park enabled, the completed pickup starts the automatic drop
+sequence; with manual carrying selected, the next mouth-close action releases a held object. The earlier
+blink/nod and closed-eye steering experiments are no longer the active controls.
+
+The table camera solves a different problem: object location. Calibration visits 10 nearby physical
+positions, the helper clicks beneath the fingertips, and a homography fits image coordinates to robot X/Y.
+That mapping connects an object box in an image to a point the arm can attempt to reach. The blue playground
+shows a reachable region; it does not itself prove that every object there can be gripped.
+
+### Inference: what runs locally and what uses Amazon Bedrock
+
+| Inference/control work | Where it runs | Role |
+|---|---|---|
+| MediaPipe face landmarks | Locally in the Jetson application | Measure head, eye and mouth state from video |
+| Vosk speech recognition | Locally | Recognize offline control words, including STOP |
+| Kinematics, gesture state and motion checks | Locally, deterministic application code | Convert permitted input to bounded robot actions |
+| Amazon Nova 2 Lite vision | Amazon Bedrock | Interpret a table-camera image and propose object names/boxes |
+| Nova 2 Lite via LangChain deepagents | Agent process using Bedrock | Plan a named-object task and call constrained tools |
+| Amazon Nova 2 Sonic | Bedrock bidirectional streaming | Understand natural speech and synthesize brief spoken prompts |
+
+The Jetson coordinates the physical system while Nova inference runs in Bedrock. Local inference performance
+and accelerator use still need benchmarking. Face detection and Nova inference use pretrained models.
+The control layer validates model-proposed actions. Named-object fetching asks the user to confirm the object;
+manual mouth/voice pickup is a separate control path. Cloud replies do not replace local workspace checks or
+feedback handling. Speech defaults to necessary prompts with a three-second cutoff.
+
+The ROS/application environment uses Python 3.10, while the Sonic/task-agent environment uses Python 3.12.
+The two communicate through process messages, keeping cloud-agent dependencies separate from the ROS runtime.
+
+### Simulation, tests and what a demo proves
+
+We built and used two test layers before live robot iteration: a lightweight virtual arm for application
+behavior and the ROBOTIS ROS stack with fake hardware, visualized in RViz. `launch/test_all.sh` and
+`tools/sim_check.py` exercise the ROS control path without commanding the real arm. This is distinct from
+claiming a full physics/contact simulation: the documented ROS test uses `use_fake_hardware:=true`.
+
+Automated tests cover kinematics, voice-command bounds, gesture transitions, pickup/lift ordering, park
+destination persistence, automatic drop, STOP interruption, camera handling and speech cutoffs. A passing
+test on the development machine is evidence about the code, not a measured success rate on the real robot.
+The team has operated the physical arm, saved a park position on the Jetson and supplied footage of a complete
+orange transfer. Repeated real-robot success counts, latency measurements and intended-user validation still
+need to be recorded separately from simulated results.
+
+### Attribution and project scope
+
+ROBOTIS supplies the arm hardware, OpenCR ecosystem and upstream arm packages. ROS 2 and ros2_control supply
+middleware/controller infrastructure. MediaPipe and Vosk supply pretrained local perception models.
+Amazon supplies the Nova models and Bedrock inference service. LangChain supplies the agent framework.
+Our build integrates those components and adds the assistive interaction, robot mathematics/control logic,
+calibration, park workflow, application UI, launch/recovery tooling and test coverage.
 
 ## Status
 
-| Part | State |
+**Everything works on the physical robot, tested:** eye-and-nose steering, mouth pick-up and release, voice
+movement, named-object fetching, Nova vision, Sonic speech/transcription, LangChain planning and automatic
+park/drop. The one exception is the Photon caregiver messaging, which is not connected (see the table). Supplied footage
+shows the real arm gripping and carrying an orange, then releasing it at the marked park spot. The screen
+recording shows a Sonic-transcribed request, an orange detection and a confirmation prompt. These are demo
+observations, not a measured object-detection accuracy or a controlled reliability study.
+
+| Part | Current evidence |
 |---|---|
-| **Nose following** (the default): the arm follows the nose live, eyes and mouth open to steer, close the mouth to pick up | tested with the pretend arm, simulated faces and a live run (whole map reached; previous nod pick-up and nod let-go were tested; the new mouth gesture needs a camera/arm trial); **not yet tried on the real arm** |
-| Head/eye pointer (`--control point`) | Arm/pointer tested on the real arm; mouth closure after steering picks up; mouth closure while holding releases (**new gesture not yet tested on hardware**) |
-| Pick-up on the real arm | **works**: opens, lowers to 5 cm, closes, lifts, holds until the next mouth closure, LET GO or a voice drop command; gripper fixes in README steps 5c and Problems; **new mouth gesture not yet tested on hardware** |
-| Pointer accuracy | measured on one teammate only: 7.0% of the screen width on the calibration dots (head and eyes alike); `tools/measure.py` measures it properly |
-| Amazon Nova 2 Lite (find objects) | **works through Bedrock** (live call checked); used by the task agent with a table camera |
-| Amazon Nova 2 Sonic (talk back) | **works through Bedrock**: spoken replies checked; a live conversation through the speaker not yet tried |
-| Nova 2 Sonic as the eye app's voice | built: reads the app's prompts aloud (live call checked: 2.5 s of speech in 2.7 s); not yet heard on the Jetson |
-| Nova 2 Sonic free speech | built: "move it a bit to the left" -> `a little left`, "pick that up please" -> `grab`, "can you grab me a banana" -> fetch the banana, "yes, that's it" -> `yes`, "not that one" -> `no` (live calls checked, typed); through the microphone in the app not yet tried |
-| Task agent (LangChain deepagents) | built and tested with Nova 2 Lite as its model; **drives the arm**, on its own (`--agent`) or inside the eye app (pretend arm tested; the real arm and the table camera not yet tried) |
-| **One session: face, voice and the agent** | built: the face moves the arm; a spoken command switches to voice (the face stops), 8 quiet seconds give it back; "bring me the banana" asks "is it the banana?" and fetches it, with STOP working throughout. Tested on the pretend arm (a full fetch, and STOP mid-fetch); **not yet on the Jetson** |
-| Photon caregiver messages | the two-way iMessage agent is built (`services/photon/caregiver.py`, `eyereach/notify.py`); **not yet called by the app or the task agent** (its `notify` still prints); needs a Photon beta key |
-| HoloLens 2 gaze input | not built |
-| Tested with people who have disabilities | no |
+| Eye and nose control | Working on the physical robot, tested (eyes tracked, nose added for stability); supplied screen recording shows face landmarks, steering and pickup/release state changes |
+| Voice movement and transcription | Working on the physical robot, tested; supplied recording displays an accepted Sonic request and confirmation |
+| Named-object fetch and park/drop | Working on the physical robot, tested; supplied physical footage shows one completed orange transfer |
+| Nova 2 Lite object understanding | Integrated with the table camera; orange detection visible in supplied footage; no labeled accuracy benchmark yet |
+| Nova 2 Sonic speech | Speech recognition/transcription and spoken feedback integrated; necessary-only output and three-second cutoff implemented |
+| LangChain deepagents | Integrated task planning, perception tools, user confirmation and notes/memory; the named-object workflow works on the arm, tested |
+| Automated software validation | Latest local run: 209 tests executed, 205 passed, 4 skipped; the skipped tests need optional environment dependencies. This is a software result, not robot success rate |
+| ROS simulation | Fake-hardware ROS control path and RViz workflow documented and exercised during development |
+| Photon caregiver messages | **Not working currently**, per team confirmation; separate code exists, but caregiver messaging/STOP is not an implemented live feature |
+| Intended-user evaluation | Not yet tested with the aunt or other intended users |
 
 ## Tracks and sponsors
 
-Main track: **Healthcare**. EyeReach restores a basic action (picking something up) to a person who cannot
-use their arms. Special tracks, and how each connects. The status column says what exists today.
+Main track target: **Healthcare**. aHandForMyAunty explores independent object retrieval for people with limited
+arm/hand movement. The intended benefit is greater control over everyday tasks; user studies are still needed. Special tracks, and how each connects. The status column says what exists today.
 
-| Track | How EyeReach connects | Status |
+| Track | How aHandForMyAunty connects | Status |
 |---|---|---|
-| **Best Hardware** | A physical system: OpenMANIPULATOR-X arm, OpenCR board, Jetson Orin NX, a webcam and a USB speaker with a microphone, wired and driven by our own control code. | **Working on the real arm** |
-| **Best Physical AI** | AI that acts in the real world: face/eye tracking (MediaPipe Face Mesh) decides where a physical arm goes, with height, speed and reach limits on every move. | **Working on the real arm** |
-| **Amazon: Best Practical AI (Nova)** | Three Amazon Nova uses, all on Bedrock (see [Amazon technology](#amazon-technology-we-use)): Nova 2 Lite names the objects on the table and boxes them, Nova 2 Lite is the task agent's brain, and Nova 2 Sonic listens and talks back. Nova's answers are only suggestions: the user still confirms before anything moves. | All three work through Bedrock and are wired into the eye app; tried on the pretend arm, **not yet on the real arm** |
-| **LangChain deepagents** | An agent turns a task ("bring me the pills") into steps: find the object, ask the person to confirm (on screen and out loud: "is it the pills? say yes or no"), pick, drop, tell the caregiver. Human in the loop: `pick` refuses until the person confirmed that exact object. | Built and tested; runs inside the eye app and fetches with its arm (pretend arm tested) |
-| **Photon (spectrum-ts)** | A caregiver gets iMessages about what the arm did, can text STOP / RESUME / STATUS, and can ask "did he take his pills?" (Nova answers from the day's event log). | Agent built; **not yet wired to the app or the task agent** |
+| **Best Hardware Hack** | A physical system: OpenMANIPULATOR-X arm, OpenCR board, Jetson Orin NX, a webcam and a USB speaker with a microphone, wired and driven by our own control code. | **Working on the real arm** |
+| **Justin Bojarski: Best Physical AI Hack** | AI that acts in the real world: face/eye tracking (MediaPipe Face Mesh) decides where a physical arm goes, with height, speed and reach limits on every move. | **Working on the real arm** |
+| **Amazon: Best Practical AI Innovation** | Three Amazon Nova uses, all on Bedrock (see [Amazon technology](#amazon-technology-we-use)): Nova 2 Lite names the objects on the table and boxes them, Nova 2 Lite is the task agent's brain, and Nova 2 Sonic listens and talks back. Nova's answers are only suggestions: the user still confirms before anything moves. | Integrated with the app; vision, speech and task inference work in the real-robot demo, tested |
+| **LangChain deepagents** | An agent turns a task ("bring me the pills") into steps: find the object, ask the person to confirm (on screen and out loud: "is it the pills? say yes or no"), pick, drop, tell the caregiver. Human in the loop: `pick` refuses until the person confirmed that exact object. | Integrated inside the app; the named-object fetch works with the real arm, tested |
+| **Photon (spectrum-ts)** | A caregiver gets iMessages about what the arm did, can text STOP / RESUME / STATUS, and can ask "did he take his pills?" (Nova answers from the day's event log). | **Not working currently**; future integration, not a live demo claim |
 
-Next: try it all on the Jetson with two cameras (face, and one looking down at the table, calibrated once with
-`launch/eyereach.sh --agent calibrate`), then call Photon from the app (caregiver messages, and its STOP). Further ahead: HoloLens 2 gaze input, so the user
-looks at real objects instead of a screen map.
+Next: record repeated real-robot pickup/park trials with success counts and timing, benchmark object detection on a
+labeled image set, integrate caregiver messaging/STOP, and test the interaction with intended users. HoloLens 2 gaze
+input remains a future exploration.
+
+The [official HackPrinceton Fall 2026 event page](https://hackprinceton-fall-26.devpost.com/) lists a two-minute
+presentation/demo and evaluates creativity, utility, charity and avidity. Our judging story connects the
+hands-free interaction to creativity, the working physical task to utility, the accessibility goal to charity,
+and the hardware integration/debugging work to avidity. Sponsor participation and implemented technology are
+separate from winning or qualifying for a named prize; confirm the relevant submission requirements before
+claiming an award category. LangChain appears as an event sponsor; its precise prize requirements need confirmation.
 
 ## Amazon technology we use
 
 Everything Amazon runs on **Amazon Bedrock** in `us-east-1`, with one IAM access key pair in `.env` (git-ignored;
 `launch/eyereach.sh` and `launch/talk.sh` load it). That key is Bedrock-only, which is enough for all three uses.
 
-| Amazon technology | What EyeReach uses it for | How it is called | Where |
+| Amazon technology | What aHandForMyAunty uses it for | How it is called | Where |
 |---|---|---|---|
 | **Amazon Nova 2 Lite** (`us.amazon.nova-2-lite-v1:0`) | Looks at a camera picture and lists the objects a robot could pick up, each with a box; or says which object a request ("the pills") means, or that it isn't sure | Bedrock **Converse API** with the image (boto3 `bedrock-runtime`), one call per picture, no retries | `eyereach/vision_nova.py` |
 | **Amazon Nova 2 Lite** as an agent model | The "brain" of the task agent: plans the steps, calls the tools, writes notes | LangChain `init_chat_model("bedrock_converse:…")` (langchain-aws) | `agent/task_agent.py` |
@@ -75,7 +215,7 @@ Design rules for the Amazon parts:
 
 ## LangChain and the other technology
 
-| Technology | What it does in EyeReach |
+| Technology | What it does in aHandForMyAunty |
 |---|---|
 | **LangChain deepagents** (sponsor) | `create_deep_agent` with two sub-agents (perception finds the object, caregiver writes the message), a notes file it keeps between runs (`FilesystemBackend`, `~/.eyereach/agent/notes.md`), and a written plan (`TodoListMiddleware`, `write_todos`). Model: Amazon Nova 2 Lite through `langchain-aws`. Runs in its own Python 3.12 environment (`~/eyereach_agent_venv`, made with `uv`), so ROS's Python 3.10 is untouched; inside the eye app it is its own program that asks the app to confirm and to pick (`--serve`). |
 | **Photon spectrum-ts** (sponsor) | The caregiver's two-way iMessage agent (`services/photon/caregiver.py`); not yet called by the app or the task agent. |
@@ -93,7 +233,7 @@ The main features (details in the sections below):
   live face is shown with its key points and an animated ray from the nose to the spot. `--pointer eyes|both` too.
 - **Calibration that runs itself:** starts when the face is steady, a gliding dot that waits for you, one automatic
   retry when poor; saved per screen and pointer, so it is reused (FIX MY AIM redoes it).
-- **Moving the arm:** live following (default) or look-and-hold; slow speeds (60 mm/s, 40 carrying); travels 12 cm
+- **Moving the arm:** live following (default) or look-and-hold; bounded steering speeds (18.75 mm/s, 11.25 carrying); travels 12 cm
   above the table.
 - **The arm follows your nose (the default):** live, no holding and no setup step; the nose tip measured from the
   point between the eyes; eyes and mouth open to steer, close the mouth to pick up; mouth closure while holding releases; face centred in the window with a nose joystick.
@@ -117,8 +257,8 @@ The main features (details in the sections below):
   ("grab me a banana": a table camera picture, Nova finds it, you confirm, the arm brings it).
 - **Nova 2 Sonic in the eye app:** its natural voice reads the prompts, and free speech ("a bit to the left")
   becomes commands next to the exact offline phrases.
-- **Face and voice share the arm by themselves:** speak an arm command and the face stops moving the arm; after 8
-  quiet seconds the face has it again. No "use voice" step. STOP stays stopped.
+- **Explicit face/voice modes:** say "voice" for speech control or "vision" for head/mouth control. A saved park
+  destination automatically receives each completed pickup. STOP stays stopped until resumed.
 - **Two cameras, one session:** the face camera (the C920, or a laptop streaming its webcam) and a table camera.
   "Bring me the banana": the agent takes a table picture, Nova finds it, the app asks "is it the banana?", and on yes
   the arm brings it, one step per frame so the camera, the STOP button and voice STOP keep working
@@ -209,7 +349,7 @@ instructions aloud, which made it ignore commands said meanwhile.
 
 ## What the Amazon models know about the project
 
-`eyereach/project_context.py` is the one description every Amazon model gets: EyeReach is an assistive robot arm for
+`eyereach/project_context.py` is the shared context every Amazon model gets (currently using the internal name EyeReach): an assistive robot arm for
 people with paralysis who can't use their arms or hands; they control a real robot arm with their nose, mouth closure and their
 voice; we are testing it right now with the real arm; they will say things like "find the cup", "grab the banana",
 "bring me my pills", "move left", "stop"; be patient and brief, ask when unsure, STOP always wins, never claim
@@ -251,7 +391,7 @@ fingertip height above the table when releasing, with a minimum of 30 mm. You ca
 `--park` to override the saved release height. Destinations and lowering paths are checked for reachability.
 To use a different release height when saving with P, start with `--park-drop-mm HEIGHT` before pressing P.
 Use `./launch/eyereach.sh --no-park` to return to manual carrying for one session. `--park` is still accepted and requires a saved destination. New park behavior has been checked
-with the simulated arm; it still needs a real camera/arm trial.
+with the simulated arm; the team now reports real-robot park/drop working and has supplied a physical orange-transfer recording.
 
 ## Control: the arm follows your nose, eyes and mouth open to steer, close the mouth to pick up
 
@@ -283,7 +423,7 @@ sees your face, it takes that as straight, and from then on **the arm follows yo
   wherever your face is in the camera's picture and whatever the camera's angle. (The earlier 3D head angle read
   41 deg "straight" with the webcam off to the side and drifted, so the arm moved right while you looked straight.)
 - **Live:** readings are smoothed a little so jitter doesn't shake the arm; movements under 1.5 deg count as straight.
-  The arm glides at up to 100 mm/s (60 carrying) so it keeps up.
+  Vision steering is capped at 18.75 mm/s (11.25 while carrying); other motion profiles have separate limits.
 - **FIX MY AIM** (or **C**) takes "straight" again, at once, from where your nose is now.
 - **On screen:** your face big in the middle of the window, mirrored and centred, with LEFT / RIGHT / AWAY (top) /
   TOWARD YOU (bottom) on its sides (the one the arm is heading toward lights up) and an arrow showing where the arm
@@ -580,7 +720,8 @@ worked or `n` if not. Both add rows to `results/measurements.csv`.
 
 ### Caregiver messages on iMessage (Photon)
 
-The robot texts the caregiver what happened, and the caregiver can text back:
+This integration is not working currently. The code below describes the intended separate caregiver service;
+it must not be presented as live robot functionality. Once integrated, the proposed message interface is:
 
 | Caregiver texts | Answer |
 |---|---|
@@ -828,7 +969,7 @@ picture arrives a little late, so the arm may trail the head; the table camera o
 The launcher has its settings at the top of `launch/eyereach.sh`: it **reuses the saved calibration** (only the
 first run, or a new screen size or pointer mode, calibrates; FIX MY AIM or C recalibrates any time), and the
 fingertips **travel 120 mm** above the table and **go down to 50 mm** to pick up (the gripper opens first, closes at
-the bottom and stays closed until the next mouth closure, LET GO or a voice drop command or LET GO). Change `TRAVEL_MM`, `GRAB_MM` or
+the bottom and stays closed until the next mouth closure, LET GO or a voice drop command). Change `TRAVEL_MM`, `GRAB_MM` or
 `REUSE` there, or override one run with `--travel-mm 120`, `--grab-mm 50` or `--calibrate`.
 
 For the real arm: turn on the 12 V power, make sure the OpenCR's USB is in the Jetson, **hold the arm** (it goes limp
