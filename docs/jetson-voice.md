@@ -80,7 +80,7 @@ To move using speech:
 1. Say **“Robot use voice”**, or look at **USE VOICE** until it fills.
 2. Say **“Robot resume”**, or look at **MOVE AGAIN**. If STOP interrupted a pickup
    below travel height, this first lifts the arm back to its travel height.
-3. Say **“Robot move left”**. It moves 20 mm, then waits.
+3. Say **“Robot move left”**. It moves 50 mm, then waits.
 4. Say **“Robot grab the item”**. It opens, lowers, closes, then lifts.
 5. Move using another direction command. Say **“Robot release the item”** to open
    at that location.
@@ -104,7 +104,7 @@ require an exact complete recognized phrase and confident recognition.
 | --- | --- |
 | Robot use voice / Robot use vision | Select movement input, initially stopped |
 | Robot resume | Enable movement; lift first if below travel height |
-| Robot move left / Robot move right | Move 20 mm from the current position |
+| Robot move left / Robot move right | Move 50 mm from the current position |
 | Robot move toward me / Robot move away from me | Move 20 mm radially away from / toward the arm base |
 | Robot a little left / Robot a little right | Move 5 mm |
 | Robot a little toward me / Robot a little away from me | Move 5 mm |
@@ -128,7 +128,7 @@ launch/eyereach.sh --voice --microphone 2
 
 Omit `--microphone 2` to use the default input. Keep the existing startup procedure
 from the README: support the arm during power/torque transitions and keep its
-power switch accessible. Verify left/right and the 20 mm movements in a clear
+power switch accessible. Verify the 50 mm left/right and 20 mm forward/back movements in a clear
 workspace before picking anything up. The software STOP requests a controller
 hold and cancels future pickup steps; it is not a hardware emergency stop.
 

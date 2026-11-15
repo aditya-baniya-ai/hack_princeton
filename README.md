@@ -162,8 +162,8 @@ No fixed phrases and no "robot" first: the app finds the key word anywhere in wh
 | **vision** | face mode: the arm follows your nose; speech is ignored except "voice" and "stop" |
 | **stop** | stops at once, in either mode |
 | **start** (or "go on", "continue"), or the mode word again | carries on after a stop |
-| left / right | moves left / right ("a bit", "a little": a small step) |
-| closer, toward me, back / away, forward | moves toward you / away from you |
+| left / right | moves 50 mm (5 cm) left / right; "a bit" or "a little" moves just 5 mm |
+| closer, toward me, back / away, forward | moves 20 mm toward you / away from you; "a little" moves 5 mm |
 | grab, pick up, take | picks up |
 | drop, let go, put down, release | lets go |
 | bring me / find / get / pick up / grab + a thing | the task agent fetches it ("bring me the banana", "please pick up the orange"); "pick it up" alone just closes the gripper |
@@ -172,6 +172,10 @@ No fixed phrases and no "robot" first: the app finds the key word anywhere in wh
 "Can you move it a bit to the left please" is a small step left; "don't move left" does nothing; questions and small
 talk do nothing. (The old "Robot ..." phrases still work but are never needed.) Coming back to vision, "straight" is
 re-taken where the arm is, so it doesn't jump.
+
+Voice moves are bounded steps: each “move left” or “move right” now travels 5 cm. Say “a little left” or
+“a little right” for 5 mm adjustments. The voice trajectory planner allows up to 80 mm/s, subject to the
+arm's configured speed, joint limits and workspace checks. Vision steering and automatic park speeds are unchanged.
 
 **Necessary speech only (default):** the robot stays quiet for ordinary movement and grab/release
 acknowledgements. It speaks brief object-confirmation questions, mode changes, stop/error notices, task results,

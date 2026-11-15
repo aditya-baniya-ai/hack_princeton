@@ -234,7 +234,7 @@ class ArmBase:
         """Bounded movement in the person's left/right or toward/away directions."""
         if self.busy() or direction not in ("left", "right", "toward me", "away from me"):
             return False
-        if distance not in (5.0, 20.0):
+        if distance not in (5.0, 20.0, 50.0) or (distance == 50.0 and direction not in ("left", "right")):
             return False
         start = list(self.joints())
         x, y, z, _ = arm.forward(start)
@@ -254,7 +254,8 @@ class ArmBase:
             if not (0 <= u <= 1 and 0 <= v <= 1) or goal is None or arm.path_problem(previous, goal):
                 self.error = "That move is outside the workspace"
                 return False
-            elapsed += max(0.04, distance / steps / self.glide,
+            # 2 mm segments at 25 ms allow up to 80 mm/s; glide and joint limits still apply.
+            elapsed += max(0.025, distance / steps / self.glide,
                            max(abs(g - j) for g, j in zip(goal, previous)) / self.speed)
             path.append(goal)
             times.append(elapsed)

@@ -13,7 +13,7 @@ from eyereach.eye_control import GuidedControl, arm_link
 
 class ParserTest(unittest.TestCase):
     def test_exact_wake_phrase_and_bounded_distances(self):
-        self.assertEqual(parse('Robot move left.'), ('jog', 'left', 20.0))
+        self.assertEqual(parse('Robot move left.'), ('jog', 'left', 50.0))
         self.assertEqual(parse('robot a little right'), ('jog', 'right', 5.0))
         self.assertEqual(parse('Robot grab the item'), 'pick up')
         self.assertEqual(parse('robot release the item'), 'let go')
@@ -24,7 +24,7 @@ class ParserTest(unittest.TestCase):
 
     def test_short_forms_only_count_in_voice_mode(self):
         from eyereach.voice_commands import needs_voice_mode
-        self.assertEqual(parse('move left'), ('jog', 'left', 20.0))     # short forms parse ...
+        self.assertEqual(parse('move left'), ('jog', 'left', 50.0))     # short forms parse ...
         self.assertEqual(parse('grab'), 'pick up')
         for text in ('move left', 'grab', 'release the item', 'resume'):
             self.assertTrue(needs_voice_mode(text), text)              # ... but only voice mode acts on them
@@ -54,8 +54,8 @@ class VoiceRoutingTest(unittest.TestCase):
         self.ctl.step(('map', (0.9, 0.2)), now=3, grab_action=True)
         self.robot.follow.assert_not_called()
         self.robot.grab.assert_not_called()
-        self.assertTrue(self.ctl.voice(('jog', 'left', 20.0), 4))
-        self.robot.jog.assert_called_once_with('left', 20.0)
+        self.assertTrue(self.ctl.voice(('jog', 'left', 50.0), 4))
+        self.robot.jog.assert_called_once_with('left', 50.0)
 
     def test_voice_grab_and_release_also_work_in_vision_mode(self):
         self.assertTrue(self.ctl.voice('pick up', 1))
@@ -68,13 +68,13 @@ class VoiceRoutingTest(unittest.TestCase):
     def test_busy_stale_duplicate_and_pre_switch_utterances_do_nothing(self):
         self.ctl.voice('voice', 1)
         self.ctl.voice('resume', 2)
-        self.assertFalse(self.ctl.voice(('jog', 'left', 20.0), 3, started=0.5, heard=3))
-        self.assertFalse(self.ctl.voice(('jog', 'left', 20.0), 4, heard=2))
-        self.ctl.voice(('jog', 'left', 20.0), 5)
-        self.assertFalse(self.ctl.voice(('jog', 'right', 20.0), 5.1))
+        self.assertFalse(self.ctl.voice(('jog', 'left', 50.0), 3, started=0.5, heard=3))
+        self.assertFalse(self.ctl.voice(('jog', 'left', 50.0), 4, heard=2))
+        self.ctl.voice(('jog', 'left', 50.0), 5)
+        self.assertFalse(self.ctl.voice(('jog', 'right', 50.0), 5.1))
         self.ctl.step(None, now=5.2)  # operation completed
-        self.assertFalse(self.ctl.voice(('jog', 'right', 20.0), 6, started=5.1))
-        self.assertFalse(self.ctl.voice(('jog', 'left', 20.0), 5.3))
+        self.assertFalse(self.ctl.voice(('jog', 'right', 50.0), 6, started=5.1))
+        self.assertFalse(self.ctl.voice(('jog', 'left', 50.0), 5.3))
         self.assertEqual(self.robot.jog.call_count, 1)
 
     def test_stop_during_pickup_is_always_available_and_does_not_open(self):
@@ -119,10 +119,38 @@ class DriverTest(unittest.TestCase):
         self.assertFalse(self.robot.busy())
         self.assertIsNone(self.robot.operation)
 
+    def test_larger_left_right_steps_are_exact_and_have_less_planner_delay(self):
+        for direction, sign in (('left', -1), ('right', 1)):
+            self.setUp()
+            self.robot.set_speeds(100.0, 1.0, 60.0, 0.6)
+            start = arm_link.arm.forward(self.robot.joints())[:2]
+            self.robot.send = Mock()
+            self.assertTrue(self.robot.jog(direction, 50.0))
+            end = arm_link.arm.forward(self.robot.operation['goal'])[:2]
+            self.assertAlmostEqual(end[0], start[0], places=4)
+            self.assertAlmostEqual(end[1] - start[1], sign * 50, places=4)
+            times = self.robot.send.call_args.args[1]
+            self.assertLess(times[-1], 1.0)  # former 40 ms segment minimum took at least a second
+            self.assertGreaterEqual(times[-1], 50.0 / 100.0)
+            self.assertTrue(all(b > a for a, b in zip([0] + times, times)))
+
+    def test_only_bounded_left_right_steps_get_the_longer_distance(self):
+        self.robot.send = Mock()
+        for direction, distance in (('left', 100.0), ('right', float('nan')), ('toward me', 50.0)):
+            self.assertFalse(self.robot.jog(direction, distance))
+        self.robot.send.assert_not_called()
+
     def test_workspace_boundary_rejected_before_publishing(self):
         self.robot.state = self.robot.hover_joints(*arm_link.area_to_point(.5, 0))
         self.robot.send = Mock()
         self.assertFalse(self.robot.jog('toward me', 20.0))
+        self.robot.send.assert_not_called()
+        self.assertIn('workspace', self.robot.error)
+
+    def test_longer_sideways_step_rejects_crossing_the_workspace_edge(self):
+        self.robot.state = self.robot.hover_joints(*arm_link.area_to_point(.99, .5))
+        self.robot.send = Mock()
+        self.assertFalse(self.robot.jog('right', 50.0))
         self.robot.send.assert_not_called()
         self.assertIn('workspace', self.robot.error)
 
@@ -217,7 +245,7 @@ class MicrophoneWorkerTest(unittest.TestCase):
             (False, {'partial': 'robot move right'}, False),
             (True, {'text': 'robot move right', 'result': [{'conf': .99}]}, True),
         ])
-        self.assertEqual([e.action for e in events], [('jog', 'right', 20.0)])
+        self.assertEqual([e.action for e in events], [('jog', 'right', 50.0)])
         self.assertEqual(self.run_recognition([
             (True, {'text': 'robot grab', 'result': [{'conf': .3}]}, True)]), [])   # very unsure: nothing
 
@@ -373,7 +401,7 @@ class ChosenVoiceModeTest(unittest.TestCase):
         self.assertTrue(self.ctl.reanchor and self.ctl.live_enabled)    # straight re-taken where the arm is
 
     def test_speaking_an_arm_command_still_returns_to_the_face_when_quiet(self):
-        self.assertTrue(self.ctl.voice(("jog", "left", 20.0), 1.0))       # auto switch, not chosen
+        self.assertTrue(self.ctl.voice(("jog", "left", 50.0), 1.0))       # auto switch, not chosen
         self.assertEqual(self.ctl.control_mode, "voice")
         self.assertFalse(self.ctl.voice_chosen)
         for i in range(60):                                               # the move takes real time to finish
@@ -398,8 +426,8 @@ class UnderstandTest(unittest.TestCase):
     def test_sentences(self):
         from eyereach.voice_commands import understand
         cases = {
-            "move left": ('jog', 'left', 20.0), "can you move it a bit to the left please": ('jog', 'left', 5.0),
-            "go right": ('jog', 'right', 20.0), "a little closer": ('jog', 'toward me', 5.0),
+            "move left": ('jog', 'left', 50.0), "can you move it a bit to the left please": ('jog', 'left', 5.0),
+            "go right": ('jog', 'right', 50.0), "a little closer": ('jog', 'toward me', 5.0),
             "move it away from me": ('jog', 'away from me', 20.0), "grab it": 'pick up', "pick that up": 'pick up',
             "let go": 'let go', "put it down": 'let go', "drop it": 'let go', "please stop moving left": 'stop',
             "voice": 'voice', "switch to voice please": 'voice', "vision": 'vision', "use my face": 'vision',
@@ -420,18 +448,18 @@ class SonicListensTest(unittest.TestCase):
 
     def test_no_double_commands_while_sonic_listens(self):
         offline = Mock(status='Listening', error=None, mute_until=0.0,
-                       poll=Mock(return_value=[VoiceEvent(('jog', 'left', 20.0), 'move left', 0, 0),
+                       poll=Mock(return_value=[VoiceEvent(('jog', 'left', 50.0), 'move left', 0, 0),
                                                VoiceEvent('stop', 'stop', 0, 0)]))
         sonic = Mock(status='Listening', error=None,
-                     poll=Mock(return_value=[VoiceEvent(('jog', 'left', 20.0), 'move left (Sonic)', 0, 0)]))
+                     poll=Mock(return_value=[VoiceEvent(('jog', 'left', 50.0), 'move left (Sonic)', 0, 0)]))
         actions = [e.action for e in BothInputs(offline, sonic).poll()]
-        self.assertEqual(actions, ['stop', ('jog', 'left', 20.0)])     # one move (Sonic's), the offline STOP
+        self.assertEqual(actions, ['stop', ('jog', 'left', 50.0)])     # one move (Sonic's), the offline STOP
 
 
 class TalksLessTest(unittest.TestCase):
     def test_short_confirmations_only(self):
         from eyereach.run_webcam import SPEECH_LIMIT, confirmation, short_speech
-        self.assertEqual(confirmation(('jog', 'left', 20.0)), "Left.")
+        self.assertEqual(confirmation(('jog', 'left', 50.0)), "Left.")
         self.assertEqual(confirmation('pick up'), "Picking up.")
         long = short_speech("Voice mode. Face tracking is off. Say move left, move right, closer or away.")
         self.assertEqual(long, "Voice mode.")
@@ -443,7 +471,7 @@ class ShortWordsTest(unittest.TestCase):
     def test_short_words_come_from_either_and_count_once(self):
         offline = Mock(status='Listening', error=None, mute_until=0.0,
                        poll=Mock(return_value=[VoiceEvent('voice', 'voice', 0, 0),
-                                               VoiceEvent(('jog', 'left', 20.0), 'left', 0, 0)]))
+                                               VoiceEvent(('jog', 'left', 50.0), 'left', 0, 0)]))
         sonic = Mock(status='Listening', error=None,
                      poll=Mock(return_value=[VoiceEvent('voice', 'voice (Sonic)', 0, 0)]))
         both = BothInputs(offline, sonic)

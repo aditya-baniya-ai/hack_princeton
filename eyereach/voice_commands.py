@@ -21,6 +21,8 @@ MODEL = Path.home() / '.eyereach' / 'models' / 'vosk-model-small-en-us-0.15'
 REPO = Path(__file__).resolve().parent.parent
 # Nova 2 Sonic's SDK needs Python 3.12: it runs as its own program in the agent's environment
 AGENT_PYTHON = Path(os.environ.get('EYEREACH_AGENT_PYTHON', Path.home() / 'eyereach_agent_venv' / 'bin' / 'python'))
+MOVE_MM = {'left': 50.0, 'right': 50.0, 'toward me': 20.0, 'away from me': 20.0}
+SMALL_MOVE_MM = 5.0
 PHRASES = {
     'stop': 'stop', 'robot stop': 'stop',
     'robot use voice': 'voice', 'robot use vision': 'vision',
@@ -31,14 +33,14 @@ PHRASES = {
     'robot yes': 'yes', 'robot no': 'no',            # answers when the task agent asks "is it the banana?"
 }
 for direction in ('left', 'right', 'toward me', 'away from me'):
-    PHRASES[f'robot move {direction}'] = ('jog', direction, 20.0)
-    PHRASES[f'robot a little {direction}'] = ('jog', direction, 5.0)
+    PHRASES[f'robot move {direction}'] = ('jog', direction, MOVE_MM[direction])
+    PHRASES[f'robot a little {direction}'] = ('jog', direction, SMALL_MOVE_MM)
 # The way people actually say it: away/forward = away from me; closer/back = toward me
 for word, direction in (('away', 'away from me'), ('forward', 'away from me'), ('closer', 'toward me'),
                         ('back', 'toward me')):
-    PHRASES[f'robot move {word}'] = ('jog', direction, 20.0)
-    PHRASES[f'robot a little {word}'] = ('jog', direction, 5.0)
-PHRASES['robot come closer'] = ('jog', 'toward me', 20.0)
+    PHRASES[f'robot move {word}'] = ('jog', direction, MOVE_MM[direction])
+    PHRASES[f'robot a little {word}'] = ('jog', direction, SMALL_MOVE_MM)
+PHRASES['robot come closer'] = ('jog', 'toward me', MOVE_MM['toward me'])
 # Short forms without 'robot' (the app only accepts these in voice mode, which is chosen on purpose); switching
 # mode and fixing the aim always need 'robot', so ordinary talk can't change mode.
 for _phrase, _action in list(PHRASES.items()):
@@ -124,7 +126,7 @@ def understand(text):
         return 'pick up'
     for word in words:                                    # the first direction said
         if word in DIRECTIONS:
-            return ('jog', DIRECTIONS[word], 5.0 if present & SMALL_WORDS else 20.0)
+            return ('jog', DIRECTIONS[word], SMALL_MOVE_MM if present & SMALL_WORDS else MOVE_MM[DIRECTIONS[word]])
     return None
 
 
