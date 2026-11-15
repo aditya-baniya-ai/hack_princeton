@@ -49,8 +49,9 @@ class FetchJob:
 
     GLIDE_SECONDS, ACTION_SECONDS = 15.0, 20.0
 
-    def __init__(self, robot, x, y, grab_mm=GRAB_MM, drop=DROP_AREA):
+    def __init__(self, robot, x, y, grab_mm=GRAB_MM, drop=DROP_AREA, drop_mm=None):
         self.robot, self.grab_mm, self.why = robot, grab_mm, None
+        self.drop_mm = grab_mm if drop_mm is None else drop_mm
         self.plan = [("glide", (x, y)), ("down", "grab"), ("glide", arm_link.area_to_point(*drop)), ("down", "release")]
         self.stage, self.deadline, self.started = None, 0.0, False
         robot.stage = "Fetching"                          # robot.halt() (STOP) changes it to "Stopped"
@@ -92,7 +93,7 @@ class FetchJob:
         elif not self.started:
             if r.busy():
                 return False
-            ok = r.grab(self.grab_mm) if what == "grab" else r.release(self.grab_mm)
+            ok = r.grab(self.grab_mm) if what == "grab" else r.release(self.drop_mm)
             if not ok:
                 return self.finish(r.error or "the arm could not reach down there")
             self.started = True

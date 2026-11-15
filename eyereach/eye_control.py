@@ -203,6 +203,7 @@ class GuidedControl:
         self.task_running = False      # the agent is working on one (face control waits)
         self.question = None           # the object the agent asks the person to confirm
         self.answers = []              # the person's yes/no, for the app to hand back
+        self.park_position, self.park_enabled, self.parking = None, False, False
         self.job = None                # the arm's fetch (brain/fetch.py FetchJob) while phase is "fetching"
         self.fetched = []              # how each fetch ended (None: brought), for the app to hand back
 
@@ -236,6 +237,8 @@ class GuidedControl:
         """One short sentence: what to do now."""
         if self.question:
             return f"Is it the {self.question}? Say yes or no."
+        if self.parking:
+            return "Taking the object to park, then lowering and releasing."
         if self.phase in ("picking", "letting go", "jogging", "recovering", "fetching"):
             return getattr(self.robot, "stage", "Working") + ". Look at STOP or say Stop."
         if self.task_running:
@@ -321,8 +324,10 @@ class GuidedControl:
             self.gaze_latches.add("motion")
             r.halt()
             if self.job is not None:                       # the agent's fetch ends here
-                self.fetched.append("the person said stop")
+                if not self.parking:
+                    self.fetched.append("the person said stop")
                 self.job = None
+                self.parking = False
             if self.question:
                 self.answers.append(False)                 # STOP is a no
                 self.question = None
@@ -417,6 +422,14 @@ class GuidedControl:
         self.job, self.phase, self.target = job, "fetching", None
         self.events.append(("fetch", {}))
         return None
+
+    def make_fetch_job(self, x, y):
+        """Use the configured destination for agent pickups too."""
+        if self.park_enabled and self.park_position:
+            from park import ParkJob
+            return ParkJob(self.robot, self.park_position, self.vision_speeds, pickup=(x, y, self.grab_mm))
+        from fetch import FetchJob
+        return FetchJob(self.robot, x, y, self.grab_mm)
 
     def follow_vision(self, target):
         """Limit this steering step without changing the voice/task/gripper speed profiles."""
@@ -534,12 +547,20 @@ class GuidedControl:
             if self.job is None:                           # STOP ended it
                 self.phase = "waiting"
             elif self.job.step():
-                self.fetched.append(self.job.why)
-                self.events.append(("fetched", {"problem": self.job.why}))
-                self.job, self.phase = None, "there"
+                park_failed = self.parking and self.job.why
+                if self.parking:
+                    self.events.append(("parked", {"problem": self.job.why}))
+                else:
+                    self.fetched.append(self.job.why)
+                    self.events.append(("fetched", {"problem": self.job.why}))
+                self.job, self.phase = None, ("waiting" if self.parking else "there")
+                self.parking = False
                 self.holding = bool(r.closed)
                 r.carrying(self.holding)
                 self.accept_after = now
+                if park_failed:
+                    self.press("stop", now)
+                    self.say.append(f"Park failed: {park_failed}")
         elif self.phase in ("jogging", "recovering") and not r.busy():
             self.phase = "there"
             self.accept_after = now
@@ -557,6 +578,15 @@ class GuidedControl:
                                            "gripper": round(position, 4) if isinstance(position, (int, float)) else None}))
             r.stage = "Holding" if self.holding else "Ready"
             self.say.append("Holding. Open your eyes and mouth to move; close your mouth to release.")
+            if self.holding and self.park_enabled and self.park_position:
+                from park import ParkJob
+                try:
+                    self.job = ParkJob(r, self.park_position, self.vision_speeds)
+                    self.parking, self.phase = True, "fetching"
+                    self.events.append(("park started", dict(self.park_position)))
+                except ValueError as exc:
+                    r.stage = "Holding"
+                    self.events.append(("parked", {"problem": str(exc)}))
         elif self.phase == "letting go" and not r.busy():
             self.accept_after = now
             self.holding = False

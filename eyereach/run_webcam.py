@@ -33,6 +33,7 @@ import cv2
 import numpy as np
 
 from eyereach import eye_control, speaker_volume, table_view
+import park  # brain/ is on the path through eye_control
 from eyereach.head_tilt import DEAD, NOSE_DEPTH, REACH, STEADY, HeadTilt, nose_angles
 from eyereach.agent_link import AgentLink, run_agent_messages
 from eyereach.session_log import SessionLog
@@ -340,11 +341,14 @@ def draw(ctl, point, tracking, paused, fps, face=None, robot_view=None, robot_no
     else:
         centered(canvas, ctl.instruction(), W // 2, 0.09 * H, 1.1, GOLD, 2)
     robot = ctl.robot
-    text(canvas, f"{robot.name}  |  {fps:.0f} fps   |  helper keys: Esc quit, C fix aim, Space pause, V face picture, +/- volume",
+    text(canvas, f"{robot.name}  |  {fps:.0f} fps   |  helper keys: Esc quit, C fix aim, Space pause, V face, P save park, +/- volume",
          0.01 * W, 0.025 * H, 0.4)
 
     mode = "VOICE" if ctl.control_mode == "voice" else "VISION"
     status = getattr(ctl, "microphone_status", "Voice input off")
+    if getattr(ctl, "park_enabled", False) and ctl.park_position:
+        p = ctl.park_position
+        status += f" | PARK {p['x']:.0f}, {p['y']:.0f} mm; drop {p['drop_mm']:.0f} mm"
     centered(canvas, f"{mode}  |  {status}", W // 2, 0.135 * H, 0.55, CYAN)
 
     # the table map
@@ -861,12 +865,30 @@ def main():
     parser.add_argument("--travel-mm", type=float, default=eye_control.HOVER_MM,
                         help=f"fingertips this high above the table at startup and while moving "
                              f"(default {eye_control.HOVER_MM:.0f}, at least 10 above --grab-mm)")
+    parser.add_argument("--park", action="store_true", help="after pickup, carry to the saved park position, lower and release")
+    parser.add_argument("--park-position", type=float, nargs=2, metavar=("X_MM", "Y_MM"),
+                        help="enable park with these robot-frame coordinates for this session")
+    parser.add_argument("--park-drop-mm", type=float, help="fingertip release height above the table (default 50 or saved height)")
     parser.add_argument("--person", default="anonymous", help="who is using it, for the session log")
     parser.add_argument("--screen-cm", type=float, help="width of the picture on the screen in cm (for degrees)")
     parser.add_argument("--distance-cm", type=float, help="eyes to screen in cm (for degrees)")
     parser.add_argument("--windowed", action="store_true", help="a 1280 x 720 window instead of full screen")
     parser.add_argument("--fullscreen", action="store_true", help=argparse.SUPPRESS)   # the default now
     args, ros_args = parser.parse_known_args()
+    if not 0.5 <= args.speech_max_seconds <= 10.0:
+        parser.error("--speech-max-seconds must be between 0.5 and 10")
+    travel = max(args.travel_mm, max(args.grab_mm, eye_control.LOWEST_GRAB_MM) + 10)
+    try:
+        park_position = park.load(travel_mm=travel) if args.park and not args.park_position else None
+        if args.park_position:
+            park_position = park.position(*args.park_position, 50 if args.park_drop_mm is None else args.park_drop_mm, travel)
+            args.park = True
+        elif args.park_drop_mm is not None and park_position:
+            park_position = park.position(park_position['x'], park_position['y'], args.park_drop_mm, travel)
+        if args.park and not park_position:
+            parser.error("no saved park position: start normally, move above the drop spot and press P, or use --park-position X Y")
+    except ValueError as exc:
+        parser.error(str(exc))
 
     if args.list_microphones:
         import sounddevice as sd
@@ -929,6 +951,7 @@ def main():
             robot.held = True        # the pretend arm: every pick-up holds something
         ctl = eye_control.GuidedControl(robot, look=args.dwell, grab_mm=args.grab_mm,
                                         movement=args.movement, vision_speeds=VISION_SPEEDS)
+        ctl.park_enabled, ctl.park_position = args.park, park_position
         ctl.volume, volume_checked = speaker_volume.get_volume(), time.monotonic()
         head = None
         if args.control == "tilt":                     # no screen pointer: the head's tilt moves the arm
@@ -961,9 +984,9 @@ def main():
                 print("Task agent: off (it needs voice commands and Nova 2 Sonic, for 'bring me the banana').")
             elif fetch.CALIBRATION.exists():
                 matrix = json.loads(fetch.CALIBRATION.read_text())["matrix"]
-                to_job = lambda u, v: fetch.FetchJob(robot, *fetch.to_table(matrix, u, v), grab)   # noqa: E731
+                to_job = lambda u, v: ctl.make_fetch_job(*fetch.to_table(matrix, u, v))   # noqa: E731
             elif not args.real:                        # the pretend arm: the picture is the play area itself
-                to_job = lambda u, v: fetch.FetchJob(robot, *eye_control.arm_link.area_to_point(u, v), grab)  # noqa: E731
+                to_job = lambda u, v: ctl.make_fetch_job(*eye_control.arm_link.area_to_point(u, v))  # noqa: E731
             else:
                 print(f"Task agent: off. Calibrate the table camera once first: "
                       f"launch/eyereach.sh --agent calibrate --camera {args.table_camera}")
@@ -1123,6 +1146,10 @@ def main():
                     spoken, spoken_necessary = "Stopped.", True
                 elif name == "control mode":
                     spoken, spoken_necessary = f"{details['mode'].title()} mode.", True
+                elif name == "parked":
+                    spoken, spoken_necessary = ("Park failed. Check the screen." if details.get("problem") else "Dropped at park."), True
+                    if details.get("problem"):
+                        print(f"Park: {details['problem']}")
                 elif name == "fetched":
                     spoken, spoken_necessary = ("Could not finish. Check the screen." if details.get("problem") else "Done."), True
             ctl.events = []
@@ -1159,6 +1186,18 @@ def main():
                 ctl.press("volume up", now, how="key")
             elif key in (ord("-"), ord("_")):
                 ctl.press("volume down", now, how="key")
+            if key in (ord("p"), ord("P")) and ctl.phase in ("waiting", "there", "following", "moving") and not ctl.holding:
+                ctl.press("stop", now)
+                face_drive.reset()
+                x, y, _, _ = eye_control.arm_link.arm.forward(robot.joints())
+                try:
+                    saved_park = park.position(x, y, 50 if args.park_drop_mm is None else args.park_drop_mm, robot.hover)
+                    ctl.park_position = park.save(saved_park, travel_mm=robot.hover)
+                    ctl.park_enabled = True
+                    print(f"Park saved: {saved_park}. Press START or say vision to continue.")
+                    log.event("park saved", **saved_park)
+                except (ValueError, OSError) as exc:
+                    print(f"Park was not saved: {exc}")
             if key == ord(" "):
                 paused = not paused
                 if paused:
