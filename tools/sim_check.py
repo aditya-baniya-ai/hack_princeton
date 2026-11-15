@@ -4,8 +4,8 @@
 
 Uses the same code as the real arm (RealArm, GuidedControl) and checks, in order:
   the gripper starts closed, and start-up opens it before the arm moves;
-  a mouth opening: open, lower to the pick-up height, close, lift back up;
-  it holds (stays closed) with no mouth opening; the next mouth opening opens it;
+  a mouth closure: open, lower to the pick-up height, close, lift back up;
+  it holds (stays closed) with no mouth closure; the LET GO opens it;
   after stop() the gripper is open.
 Prints one line per check and exits 0 if all passed.
 """
@@ -52,7 +52,7 @@ def main():
 
     ctl = eye_control.GuidedControl(r, movement="follow")
     t0, lowest, closed_low, open_going_down = time.monotonic(), 999.0, False, True
-    ctl.step(None, mouth_open=True)
+    ctl.step(None, grab_action=True)
     while time.monotonic() - t0 < 15:
         ctl.step(None)
         z, g = arm.forward(r.joints())[2], r.gripper_position()
@@ -65,7 +65,7 @@ def main():
             break
         time.sleep(0.02)
     z = arm.forward(r.joints())[2]
-    check("mouth opening: goes down with the gripper open", open_going_down)
+    check("mouth closure: goes down with the gripper open", open_going_down)
     check("... lowest point is the pick-up height", abs(lowest - eye_control.GRAB_MM) < 5,
           f"{lowest:.0f} mm, wanted {eye_control.GRAB_MM:.0f}")
     check("... closes at the bottom", closed_low)
@@ -76,16 +76,16 @@ def main():
     while time.monotonic() < end:
         ctl.step(None)
         time.sleep(0.02)
-    check("holds it for 3 s with no mouth opening", ctl.holding and r.gripper_position() <= -0.005)
+    check("holds it for 3 s with no mouth closure", ctl.holding and r.gripper_position() <= -0.005)
 
-    ctl.step(None, mouth_open=True)
+    ctl.press("let go", time.monotonic())
     end = time.monotonic() + 4
     while time.monotonic() < end and ctl.phase != "waiting":
         ctl.step(None)
         time.sleep(0.02)
     for _ in range(20):
         r.rclpy.spin_once(r.node, timeout_sec=0.05)
-    check("next mouth opening lets go (gripper open)", r.gripper_position() >= eye_control.arm_link.OPEN_ENOUGH,
+    check("LET GO releases (gripper open)", r.gripper_position() >= eye_control.arm_link.OPEN_ENOUGH,
           f"{r.gripper_position():+.3f}")
 
     move_gripper(r.node, GRIPPER_POSITION["close"], wait=True)   # close it, so stop() has to open it

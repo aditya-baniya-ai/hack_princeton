@@ -78,7 +78,8 @@ class EyeControl:
 # ---------------------------------------------------------------------------------------------
 # Guided control: for someone who can only move their eyes. Nothing moves until they choose it.
 #   look at a spot on the map and keep looking  -> the arm slowly goes there
-#   open the mouth                           -> pick up here, or let go if holding something
+#   eyes and mouth open                        -> steer slowly
+#   close the mouth after steering              -> pick up here; LET GO releases
 #   look at a button and keep looking           -> PICK UP / LET GO, STOP, FIX MY AIM
 #   look away, close the eyes, or lose the face -> nothing new happens, the arm finishes and waits
 # ---------------------------------------------------------------------------------------------
@@ -118,53 +119,50 @@ class Dwell:
         return min(1.0, progress), None
 
 
-class ClosedEyes:
-    """Hold both eyes shut to enable steering; either eye opening disables it immediately."""
+class FaceDrive:
+    """Eyes open + mouth open steers; a deliberate mouth closure requests one pickup."""
 
-    def __init__(self, shut=0.12, hold=0.35):
-        self.shut, self.hold, self.since = shut, hold, None
+    def __init__(self, mouth_open=0.35, mouth_closed=0.20, eye_open=0.12,
+                 open_hold=0.35, close_hold=0.15):
+        self.opened, self.closed, self.eye_open = mouth_open, mouth_closed, eye_open
+        self.open_hold, self.close_hold = open_hold, close_hold
+        self.reset()
 
-    def update(self, openings, now, enabled=True):
-        if (not enabled or openings is None or len(openings) != 2 or
-                any(not math.isfinite(x) or x < 0 or x >= self.shut for x in openings)):
-            self.since = None
-            return False
-        if self.since is None:
-            self.since = now
-        return now - self.since >= self.hold
-
-
-class MouthOpen:
-    """One action per deliberate opening; close the mouth before another can fire.
-
-    Ratios are inner lip gap / mouth width. Face loss or disabled input disarms
-    detection, so returning with an open mouth cannot trigger a grab.
-    """
-
-    def __init__(self, opened=0.35, closed=0.20, hold=0.35):
-        self.opened, self.closed, self.hold = opened, closed, hold
+    def reset(self):
+        self.open_since = self.close_since = None
         self.armed = False
-        self.since = None
 
-    def update(self, opening, now, enabled=True):
-        if not enabled or opening is None or not math.isfinite(opening):
-            self.armed, self.since = False, None
-            return False
-        if opening <= self.closed:
-            self.armed, self.since = True, None
-        elif opening >= self.opened and self.armed:
-            if self.since is None:
-                self.since = now
-            if now - self.since >= self.hold:
-                self.armed, self.since = False, None
-                return True
+    def update(self, eyes, mouth, now, enabled=True):
+        if (not enabled or eyes is None or len(eyes) != 2 or mouth is None or
+                not math.isfinite(mouth) or mouth < 0 or
+                any(not math.isfinite(x) or x < 0 for x in eyes)):
+            self.reset()
+            return False, False
+        eyes_open = all(x >= self.eye_open for x in eyes)
+        if mouth >= self.opened:
+            self.close_since = None
+            if not eyes_open:
+                self.open_since = None
+                return False, False
+            if self.open_since is None:
+                self.open_since = now
+            if now - self.open_since >= self.open_hold:
+                self.armed = True
+            return self.armed, False
+        self.open_since = None
+        if mouth <= self.closed and self.armed and eyes_open:
+            if self.close_since is None:
+                self.close_since = now
+            if now - self.close_since >= self.close_hold:
+                self.reset()
+                return False, True
         else:
-            self.since = None
-        return False
+            self.close_since = None
+        return False, False
 
 
 class GuidedControl:
-    """Continuous or dwell-based control of the arm with dwell buttons and a mouth opening. step() takes what the person
+    """Continuous or dwell-based control of the arm with dwell buttons and mouth-controlled steering. step() takes what the person
     is looking at; self.say holds sentences for the voice; self.events holds (name, details) for the
     session log; self.wants_calibration asks the app to re-calibrate."""
 
@@ -251,15 +249,14 @@ class GuidedControl:
         if self.phase == "moving":
             return "Moving. Look at STOP or say Stop."
         if getattr(self, "tilt", False):
-            return ("Close eyes to steer. Open mouth to let go. Say voice." if self.holding else
-                    "Close eyes to steer. Open mouth to pick up. Say voice.")
+            return ("Eyes + mouth open to steer. Use LET GO to release." if self.holding else
+                    "Eyes + mouth open to steer. Close mouth to pick up.")
         if self.movement == "follow":
-            return "Close eyes to move. Open your mouth to let go." if self.holding else "Close eyes to move. Open your mouth to pick up."
+            return "Eyes + mouth open to move. Use LET GO to release." if self.holding else "Eyes + mouth open to move. Close mouth to pick up."
         if self.holding:
-            return ("Open your mouth to let go here." if self.phase == "there" else
-                    "Look where to put it, then open your mouth to let go.")
-        return ("Open your mouth to pick it up here, or choose another spot." if self.phase == "there" else
-                "Look at a spot on the table and keep looking. The arm goes there.")
+            return ("Use LET GO to release here." if self.phase == "there" else
+                    "Move to where you want to put it, then use LET GO.")
+        return "Open your eyes and mouth to steer; close your mouth to pick up."
 
     def go(self, target, why, now, then=None):
         self.target, self.phase, self.then, self.closest = target, "moving", then, (math.inf, now)
@@ -435,20 +432,26 @@ class GuidedControl:
         finally:
             r.glide, r.speed = glide, speed
 
-    def open_mouth(self, now):
-        """Opening the mouth: pick up here, or let go if holding something."""
-        self.press("let go" if self.holding else "pick up", now, how="mouth")
+    def close_mouth(self, now):
+        """Pick up once after steering; closing the mouth never drops a held object."""
+        if self.live_enabled and not self.holding and not (self.task_running or self.question):
+            self.press("pick up", now, how="mouth close")
 
-    def step(self, looking, now=None, mouth_open=False, suspended=False, vision_movement=True):
-        """One frame. looking: None, ("button", name) or ("map", (u, v)). mouth_open: a deliberate opening just fired.
-        vision_movement: both eyes have stayed closed; gates steering, not the mouth action."""
+    def hold_steering(self):
+        """Hold the measured position without declaring an explicit STOP or interrupting pickup."""
+        self.robot.halt()
+        self.robot.stage = "Holding" if self.holding else "Ready"
+        self.target, self.then, self.phase = None, None, "waiting"
+
+    def step(self, looking, now=None, grab_action=False, suspended=False, vision_movement=True):
+        """One frame. looking: None, ("button", name) or ("map", (u, v)). grab_action: a deliberate mouth closure just fired.
+        vision_movement: eyes and mouth are open; gates steering, not an active pickup."""
         now = time.monotonic() if now is None else now
         r = self.robot
         if self.control_mode == "vision" and not vision_movement:
             # Cancel the active trajectory before updating the robot, including dwell destinations.
             if self.phase in ("moving", "following"):
-                r.halt()
-                self.target, self.then, self.phase = None, None, "waiting"
+                self.hold_steering()
             if looking is not None and looking[0] == "map":
                 looking = None
         r.update()
@@ -465,14 +468,17 @@ class GuidedControl:
             self.live_enabled = True                       # what the person asked for: the face takes over again
             self.say[-1:] = ["Face control again."]
         if self.control_mode == "voice":
-            mouth_open = False
+            grab_action = False
         if suspended:
-            looking, mouth_open = None, False
+            looking, grab_action = None, False
             if self.phase in ("moving", "following", "jogging"):
-                r.halt()
-                self.target, self.then, self.phase = None, None, "waiting"
-        if mouth_open:
-            self.open_mouth(now)
+                if self.control_mode == "vision" and self.phase in ("moving", "following"):
+                    self.hold_steering()
+                else:
+                    r.halt()
+                    self.target, self.then, self.phase = None, None, "waiting"
+        if grab_action:
+            self.close_mouth(now)
         if looking is not None:
             for group, names in (("mode", ("voice", "vision")), ("motion", ("stop", "resume"))):
                 if looking[0] == "button" and looking[1] in names:
@@ -509,8 +515,7 @@ class GuidedControl:
                     self.task_started = now
                 self.follow_vision(self.target)
             elif self.phase == "following":
-                r.halt()
-                self.target, self.phase = None, "waiting"
+                self.hold_steering()
         if self.phase == "moving":
             self.follow_vision(self.target)
             u, v, _ = r.gripper_area()
@@ -541,8 +546,7 @@ class GuidedControl:
             self.say.append("Ready.")
         elif self.phase == "picking" and not r.busy():
             self.accept_after = now
-            # After a pick-up the gripper stays closed, holding what it grabbed, until the next mouth
-            # opening (or LET GO) opens it. The finger-position guess at whether something is held
+            # Keep the gripper closed until LET GO or voice drop. The position-based holding guess
             # is only logged: on the real arm it said "nothing" even when it had the object.
             detected = r.holding()
             position = getattr(r, "gripper_position", lambda: None)()
@@ -551,7 +555,8 @@ class GuidedControl:
             self.phase = "there" if self.holding else "waiting"
             self.events.append(("picked", {"holding": detected, "closed": r.closed,
                                            "gripper": round(position, 4) if isinstance(position, (int, float)) else None}))
-            self.say.append("Holding. Move to where you want to drop it, then open your mouth.")
+            r.stage = "Holding" if self.holding else "Ready"
+            self.say.append("Holding. Open your eyes and mouth to move; use LET GO to release.")
         elif self.phase == "letting go" and not r.busy():
             self.accept_after = now
             self.holding = False

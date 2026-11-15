@@ -8,8 +8,8 @@ environments can import it. Keep it short: it is sent with every request.
 PROJECT_CONTEXT = (
     "About this project: EyeReach is an assistive robot arm for people with paralysis who cannot use their arms "
     "or hands. The person controls a real robot arm (a small ROBOTIS OpenMANIPULATOR-X with a two-finger gripper, "
-    "run by an NVIDIA Jetson) without touching anything: the arm moves slowly where they point their nose only while both eyes are held closed; opening either eye stops steering. Opening their mouth picks "
-    "something up or lets it go, and they can switch to voice by saying 'use my voice'. One camera watches the "
+    "run by an NVIDIA Jetson) without touching anything: the arm moves slowly where they point their nose only while both eyes and their mouth are open. Closing the mouth stops steering and picks "
+    "something up in one complete lower, grip and lift sequence; LET GO or a voice drop command releases it, and they can switch to voice by saying 'use my voice'. One camera watches the "
     "person's face; another camera looks at the robot and the table in front of it. We are building and testing "
     "this right now with the real robot arm on a table, so things may be rough, and small light objects (a cup, a "
     "pill bottle, a banana, a marker) are used for testing. "

@@ -130,64 +130,34 @@ class GuidedControlTest(unittest.TestCase):
         self.assertTrue(ctl.wants_calibration)
 
 
-class MouthOpenTest(unittest.TestCase):
-    def test_hold_fires_once_until_closed_again(self):
-        m = eye_control.MouthOpen()
-        self.assertFalse(m.update(0.05, 0))
-        self.assertFalse(m.update(0.5, 0.1))
-        self.assertTrue(m.update(0.5, 0.5))
-        self.assertFalse(m.update(0.5, 5))
-        self.assertFalse(m.update(0.05, 5.1))
-        self.assertFalse(m.update(0.5, 5.2))
-        self.assertTrue(m.update(0.5, 5.6))
-
-    def test_brief_opening_and_threshold_jitter_do_not_fire(self):
-        m = eye_control.MouthOpen()
-        for opening, now in ((0.05, 0), (0.5, 0.1), (0.25, 0.2),
-                             (0.5, 0.3), (0.05, 0.4)):
-            self.assertFalse(m.update(opening, now))
-
-    def test_face_loss_disabled_and_initial_open_mouth_require_closing(self):
-        for interrupt in (None, float('nan'), 0.05):
-            m = eye_control.MouthOpen()
-            self.assertFalse(m.update(0.5, 0))
-            self.assertFalse(m.update(0.5, 1))
-            m.update(0.05, 2)
-            m.update(0.5, 2.1)
-            m.update(interrupt, 2.2, enabled=interrupt != 0.05)
-            self.assertFalse(m.update(0.5, 3))
-            self.assertFalse(m.update(0.5, 4))
-            m.update(0.05, 5)
-            m.update(0.5, 5.1)
-            self.assertTrue(m.update(0.5, 5.5))
-
-
 class FreePlacementTest(unittest.TestCase):
-    def test_mouth_pick_and_release_at_chosen_position(self):
+    def test_mouth_close_picks_and_button_releases_at_chosen_position(self):
         robot, ctl = guided()
         robot.held = object()                          # something is under the gripper
-        ctl.step(None, mouth_open=True)
+        ctl.step(None, grab_action=True)
         self.assertEqual(ctl.phase, "picking")
         self.assertEqual(keep_looking(ctl, None, "there"), "there")
         self.assertTrue(ctl.holding and robot.closed)  # holding it: stays closed
         ctl.go((0.6, 0.5), "look", time.monotonic())
         self.assertEqual(keep_looking(ctl, None, "there"), "there")
         before = robot.gripper_area()
-        ctl.step(None, mouth_open=True)
+        ctl.press("let go", time.monotonic())
         self.assertEqual(keep_looking(ctl, None, "waiting"), "waiting")
         self.assertFalse(ctl.holding or robot.closed)
         self.assertLess(math.dist(before, robot.gripper_area()), 1.0)
 
-    def test_stays_closed_after_a_pick_up_until_the_next_mouth_opening(self):
+    def test_stays_closed_after_pickup_until_explicit_release(self):
         robot, ctl = guided()                          # the finger check says "nothing held"
-        ctl.step(None, mouth_open=True)
+        ctl.step(None, grab_action=True)
         self.assertEqual(keep_looking(ctl, None, "there", seconds=10), "there")
         for _ in range(50):                            # a while later, no mouth opening: still closed
             ctl.step(None)
             time.sleep(0.02)
         self.assertTrue(ctl.holding and robot.closed)
         self.assertEqual(ctl.buttons()[0][0], "let go")
-        ctl.step(None, mouth_open=True)              # the next mouth opening opens it
+        ctl.step(None, grab_action=True)              # closing the mouth cannot release it
+        self.assertTrue(ctl.holding and robot.closed)
+        ctl.press("let go", time.monotonic())
         self.assertEqual(keep_looking(ctl, None, "waiting", seconds=10), "waiting")
         self.assertFalse(ctl.holding or robot.closed)
 
@@ -205,7 +175,7 @@ class GrabHeightTest(unittest.TestCase):
         robot, ctl = guided()
         heights = []
         robot.grab = lambda height: heights.append(height) or False
-        ctl.open_mouth(time.monotonic())
+        ctl.close_mouth(time.monotonic())
         self.assertEqual(heights, [eye_control.GRAB_MM])
         self.assertGreaterEqual(eye_control.GuidedControl(robot, grab_mm=5).grab_mm, 30.0)
 

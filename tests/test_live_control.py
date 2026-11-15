@@ -35,18 +35,18 @@ class LiveControlTest(unittest.TestCase):
         self.ctl.step(("map", (0.2, 0.3)), now=0.3)
         self.robot.follow.assert_called_once_with(0.2, 0.3)
 
-    def test_mouth_open_picks_up_without_following_during_sequence(self):
+    def test_mouth_close_picks_up_without_following_during_sequence(self):
         self.robot.busy.return_value = True
         self.ctl.step(("map", (0.2, 0.3)), now=0)
         self.robot.follow.reset_mock()
-        self.ctl.step(("map", (0.8, 0.6)), now=0.1, mouth_open=True)
+        self.ctl.step(("map", (0.8, 0.6)), now=0.1, grab_action=True)
         self.robot.grab.assert_called_once()
         self.robot.follow.assert_not_called()
         self.assertEqual(self.ctl.phase, "picking")
 
-    def test_pause_cancels_saved_route_and_ignores_mouth_opening(self):
+    def test_pause_cancels_saved_route_and_ignores_mouth_closure(self):
         self.ctl.go((0.1, 0.9), "dropoff", 0, then="let go")
-        self.ctl.step(None, now=0.1, mouth_open=True, suspended=True)
+        self.ctl.step(None, now=0.1, grab_action=True, suspended=True)
         self.robot.follow.assert_not_called()
         self.robot.grab.assert_not_called()
         self.assertIsNone(self.ctl.then)
@@ -111,7 +111,9 @@ class PickupSequenceTest(unittest.TestCase):
             self.assertTrue(ctl.holding)
             robot.open_here.assert_not_called()
             self.assertEqual(ctl.events[-1][1]["gripper"], -0.008)
-            ctl.open_mouth(2)
+            ctl.close_mouth(2)
+            robot.release_here.assert_not_called()
+            ctl.press("let go", 2)
             robot.release_here.assert_called_once()
 
 
@@ -130,28 +132,3 @@ class HandButtonLatchTest(unittest.TestCase):
         ctl.step(("button", "let go"), now=5)
         ctl.step(("button", "let go"), now=6)
         robot.release_here.assert_called_once()
-
-
-class MouthGestureIntegrationTest(unittest.TestCase):
-    def test_mouth_controls_gripper_in_both_head_movement_modes(self):
-        from eyereach.eye_control import MouthOpen
-        from eyereach.head_tilt import HeadTilt
-        from eyereach.run_webcam import tilt_step
-        for mode in ("follow", "joystick"):
-            with self.subTest(mode=mode):
-                robot = Mock()
-                robot.busy.return_value = True
-                robot.closed = False
-                robot.normal = robot.carry = (60, 1)
-                robot.gripper_area.return_value = (0.5, 0.5, 60)
-                ctl = GuidedControl(robot, movement="follow")
-                ctl.tilt = True
-                head = HeadTilt(mode=mode)
-                head.set_centre(0, 0)
-                mouth = MouthOpen()
-                for ratio, now in ((0.05, 0), (0.5, 0.1), (0.5, 0.5), (0.5, 2)):
-                    action = mouth.update(ratio, now)
-                    tilt_step(ctl, head.update((0, 0), now), True, False, now, mouth_action=action, eyes_closed=True)
-                robot.grab.assert_called_once()
-                robot.release.assert_not_called()
-                self.assertEqual(ctl.phase, "picking")

@@ -7,8 +7,8 @@ it is running; the screen (and a voice) always says what to do next.
 1. It finds the face, then shows a yellow dot that glides around the screen. Pointing the nose at it
    (or, with --pointer eyes, following it with the eyes) teaches the computer where you point (about
    40 seconds). Your face is shown with a ray coming out of the nose, so you can see where you point.
-2. Close both eyes for 0.35 seconds, then tilt to move slowly. Open either eye to stop steering.
-3. Open your mouth briefly to pick up where the arm is (or to let go when holding something).
+2. Open both eyes and your mouth, then tilt to move slowly. Close your mouth to pick up.
+3. Mouth closure runs a complete lower, grip and lift. Use LET GO or voice to release.
 4. Look at a big button and keep looking (it fills up): PICK UP / LET GO, STOP, FIX MY AIM.
 Losing face tracking stops steering. Every session is logged (eyereach/session_log.py).
 
@@ -664,14 +664,14 @@ def tracking_log_due(now, every=1.0):
     return False
 
 
-def tilt_step(ctl, tilt, tracking, paused, now, voice_acted=False, mouth_action=False, eyes_closed=False):
+def tilt_step(ctl, tilt, tracking, paused, now, voice_acted=False, grab_action=False, vision_movement=False):
     """One frame of tilt control: head for a spot TILT_LEAD ahead of the arm in the tilt's direction, at the
-    tilt's speed; no tilt (or no face, or paused) and the arm stops. Mouth opening is handled through the same control step."""
+    tilt's speed; no tilt (or no face, or paused) and the arm stops. Mouth closure starts a pickup through the same control step."""
     if tilt is not None and tilt.target is not None:   # follow mode: go to the spot the nose points to, live
         target = tilt.target if tracking and not voice_acted and not paused else None
-        ctl.step(("map", target) if target else None, now, mouth_action and not voice_acted,
+        ctl.step(("map", target) if target else None, now, grab_action and not voice_acted,
                  suspended=paused or (ctl.control_mode == "vision" and not tracking),
-                 vision_movement=eyes_closed)
+                 vision_movement=vision_movement)
         return target
     moving = tracking and tilt is not None and tilt.direction is not None and not voice_acted and not paused
     base = (ctl.robot.carry if ctl.holding else ctl.robot.normal)[0]
@@ -681,9 +681,9 @@ def tilt_step(ctl, tilt, tracking, paused, now, voice_acted=False, mouth_action=
         u, v, _ = ctl.robot.gripper_area()
         target = (min(1.0, max(0.0, u + tilt.direction[0] * TILT_LEAD)),
                   min(1.0, max(0.0, v + tilt.direction[1] * TILT_LEAD)))
-    ctl.step(("map", target) if target else None, now, mouth_action and not voice_acted,
+    ctl.step(("map", target) if target else None, now, grab_action and not voice_acted,
              suspended=paused or (ctl.control_mode == "vision" and not tracking),
-             vision_movement=eyes_closed)
+             vision_movement=vision_movement)
     return target
 
 
@@ -798,10 +798,10 @@ def calibrate(camera, gaze, shown, voice=None, seconds=DOT_SECONDS, again=False,
             return None
     canvas = blank()
     centered(canvas, "All set!", W // 2, 0.42 * H, 1.8, GREEN, 3)
-    centered(canvas, "Close your eyes and point to move slowly. Open your mouth to pick up or let go.", W // 2,
+    centered(canvas, "Eyes and mouth open to move slowly. Close mouth to pick up.", W // 2,
              0.54 * H, 0.9, WHITE, 2)
     shown(canvas)
-    voice.say("All set. Close your eyes and point to move slowly. Open your mouth to pick up or let go.")
+    voice.say("All set. Eyes and mouth open to move slowly. Close mouth to pick up.")
     return None if wait(3.0) else (gmap, error)
 
 
@@ -813,7 +813,7 @@ def main():
     parser.add_argument("--camera", default="0", help="camera number or path (default 0; Jetson /dev/video0)")
     parser.add_argument("--reuse", action="store_true", help="skip calibration, use the saved one")
     parser.add_argument("--control", choices=("tilt", "point"), default="tilt",
-                        help="tilt: turn your head to move the arm, open your mouth to pick up (default). "
+                        help="tilt: eyes and mouth open to steer slowly; close mouth to pick up (default). "
                              "point: point at the table map on the screen (needs the dot calibration)")
     parser.add_argument("--pointer", choices=("head", "eyes", "both"), default="head",
                         help="head: point with your face (steady; default). eyes: eyes only, for people who "
@@ -966,8 +966,7 @@ def main():
                     clicks.append(hit[1])
 
         cv2.setMouseCallback(WINDOW, mouse)
-        mouth = eye_control.MouthOpen()
-        eye_gate = eye_control.ClosedEyes()
+        face_drive = eye_control.FaceDrive()
         smooth, paused, last, lost_since = OneEuro(still_hz=1.2, speed_up=0.004), False, time.monotonic(), None
         view_on = True
         view_size = face_rect()[2:]
@@ -1030,12 +1029,11 @@ def main():
                 eyes_open = args.pointer == "head" or (gaze.opening is not None and gaze.opening >=
                                                        0.12)
                 tracking = raw is not None and eyes_open
-            eyes_closed = eye_gate.update(
-                gaze.eyes if face_on else None, now,
-                enabled=not paused and tracking and ctl.control_mode == "vision")
-            mouth_action = mouth.update(
-                gaze.mouth if face_on else None, now,
-                enabled=not paused and tracking and ctl.control_mode == "vision")
+            vision_movement, grab_action = face_drive.update(
+                gaze.eyes if face_on else None, gaze.mouth if face_on else None, now,
+                enabled=not paused and tracking and ctl.control_mode == "vision" and ctl.live_enabled
+                and ctl.phase in ("waiting", "there", "following", "moving")
+                and not (ctl.task_running or ctl.question or ctl.wants_task))
             voice_acted = False
             spoken = None
             if listener:
@@ -1056,7 +1054,7 @@ def main():
                     ctl.heard_command = "stop - accepted"
                     voice_acted = True
                     clicks.clear()
-                    mouth_action = False
+                    grab_action = False
                 elif not paused and not listener.error:
                     for event in events:
                         if ctl.control_mode != "voice" and event.action not in ("voice", "vision", "stop", "resume"):
@@ -1075,7 +1073,7 @@ def main():
                         if accepted:
                             voice_acted = True
                             clicks.clear()
-                            mouth_action = False
+                            grab_action = False
                             break  # never execute a batch of old commands
 
             if agent:
@@ -1086,13 +1084,13 @@ def main():
                 if not paused:
                     ctl.press(name, now, how="click")
                     ctl.dwell = eye_control.Dwell(args.dwell)
-                    mouth_action = False
+                    grab_action = False
             if head is not None:
-                tilt_step(ctl, tilt, tracking, paused, now, voice_acted, mouth_action, eyes_closed)
+                tilt_step(ctl, tilt, tracking, paused, now, voice_acted, grab_action, vision_movement)
             else:
-                ctl.step(None if paused or not tracking or voice_acted else looking_at(ctl, point), now, mouth_action,
+                ctl.step(None if paused or not tracking or voice_acted else looking_at(ctl, point), now, grab_action,
                          suspended=paused or (ctl.control_mode == "vision" and not tracking),
-                         vision_movement=eyes_closed)
+                         vision_movement=vision_movement)
             if ctl.wants_volume:                           # QUIETER / LOUDER was pressed (or + / - typed)
                 ctl.volume = speaker_volume.change(ctl.wants_volume)
                 ctl.wants_volume = 0
@@ -1145,8 +1143,7 @@ def main():
             if key in (ord("c"), ord("C")) or ctl.wants_calibration:
                 ctl.press("stop", now)
                 ctl.step(None, suspended=True)
-                mouth = eye_control.MouthOpen()
-                eye_gate = eye_control.ClosedEyes()
+                face_drive = eye_control.FaceDrive()
                 ctl.wants_calibration = False
                 if head is not None:                   # straight = where the nose is now
                     angles = head_angles(gaze)

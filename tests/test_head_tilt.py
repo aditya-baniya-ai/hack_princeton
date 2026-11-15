@@ -81,7 +81,7 @@ class TiltDrivesTheArmTest(unittest.TestCase):
         while time.monotonic() < end:
             now = time.monotonic()
             tilt = head.update(pose, now)
-            run_webcam.tilt_step(ctl, tilt, pose is not None, False, now, eyes_closed=True)
+            run_webcam.tilt_step(ctl, tilt, pose is not None, False, now, vision_movement=True)
             time.sleep(0.03)
 
     def test_turn_left_moves_left_centre_stops_mouth_picks_and_lets_go(self):
@@ -108,13 +108,13 @@ class TiltDrivesTheArmTest(unittest.TestCase):
         from eyereach.run_webcam import tilt_step
         import time
         now = time.monotonic()
-        tilt_step(ctl, head.update((0, 0), now), True, False, now, mouth_action=True, eyes_closed=True)
+        tilt_step(ctl, head.update((0, 0), now), True, False, now, grab_action=True, vision_movement=True)
         self.assertEqual(ctl.phase, "picking")
         self.frames(ctl, head, (0.0, 0.0), 5.0)
         self.assertTrue(ctl.holding and robot.closed)           # holding after the mouth action
         self.frames(ctl, head, (0.0, 0.0), 1.5)
         now = time.monotonic()
-        tilt_step(ctl, head.update((0, 0), now), True, False, now, mouth_action=True, eyes_closed=True)
+        ctl.press("let go", now)
         self.frames(ctl, head, (0.0, 0.0), 3.0)
         self.assertFalse(ctl.holding or robot.closed)
 
@@ -270,7 +270,7 @@ class FollowDrivesTheArmTest(unittest.TestCase):
         def frames(pose, seconds):
             end = time.monotonic() + seconds
             while time.monotonic() < end:
-                run_webcam.tilt_step(ctl, h.update(pose, time.monotonic()), True, False, time.monotonic(), eyes_closed=True)
+                run_webcam.tilt_step(ctl, h.update(pose, time.monotonic()), True, False, time.monotonic(), vision_movement=True)
                 time.sleep(0.03)
         frames((0.0, 0.0, 0.0), 1.5)
         u0 = robot.gripper_area()[0]

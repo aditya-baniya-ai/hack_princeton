@@ -51,7 +51,7 @@ class VoiceRoutingTest(unittest.TestCase):
         self.ctl.voice('voice', 1)
         self.robot.halt.assert_called_once()
         self.assertTrue(self.ctl.live_enabled)        # voice mode is ready at once: no 'resume' needed
-        self.ctl.step(('map', (0.9, 0.2)), now=3, mouth_open=True)
+        self.ctl.step(('map', (0.9, 0.2)), now=3, grab_action=True)
         self.robot.follow.assert_not_called()
         self.robot.grab.assert_not_called()
         self.assertTrue(self.ctl.voice(('jog', 'left', 20.0), 4))
