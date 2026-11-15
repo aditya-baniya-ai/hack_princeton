@@ -7,8 +7,8 @@ it is running; the screen (and a voice) always says what to do next.
 1. It finds the face, then shows a yellow dot that glides around the screen. Pointing the nose at it
    (or, with --pointer eyes, following it with the eyes) teaches the computer where you point (about
    40 seconds). Your face is shown with a ray coming out of the nose, so you can see where you point.
-2. Open both eyes and your mouth, then tilt to move slowly. Close your mouth to pick up.
-3. Mouth closure runs a complete lower, grip and lift. Use LET GO or voice to release.
+2. Open both eyes and your mouth, then tilt to move slowly. Close your mouth to pick up or release.
+3. Mouth closure runs a complete lower, grip and lift. Open the mouth to steer again, then close it to release.
 4. Look at a big button and keep looking (it fills up): PICK UP / LET GO, STOP, FIX MY AIM.
 Losing face tracking stops steering. Every session is logged (eyereach/session_log.py).
 
@@ -58,7 +58,7 @@ DIM, WHITE, CYAN, PINK = (150, 140, 140), (235, 235, 235), (230, 220, 90), (180,
 GOLD, GREEN, RED, GREY = (90, 200, 255), (120, 220, 120), (90, 90, 255), (90, 85, 85)
 RAY_COLOR = (255, 230, 120)
 TILT_LEAD = 0.2                # joystick mode: the arm heads this far (map units) ahead of where it is
-VISION_SPEEDS = (10.0, 0.12, 6.0, 0.08)  # mm/s and rad/s; slower again while carrying
+VISION_SPEEDS = (12.5, 0.15, 7.5, 0.10)  # mm/s and rad/s; slower again while carrying
 FOLLOW_SPEEDS = (100.0, 1.0, 60.0, 0.6)  # normal profile for voice/task actions; steering uses VISION_SPEEDS
 TELL = {   # what to do during calibration, per pointer mode: (on screen, spoken)
     "head": ("Point your nose at the yellow dot. Turn your head, not just your eyes.",
@@ -798,10 +798,10 @@ def calibrate(camera, gaze, shown, voice=None, seconds=DOT_SECONDS, again=False,
             return None
     canvas = blank()
     centered(canvas, "All set!", W // 2, 0.42 * H, 1.8, GREEN, 3)
-    centered(canvas, "Eyes and mouth open to move slowly. Close mouth to pick up.", W // 2,
+    centered(canvas, "Eyes and mouth open to move slowly. Close mouth to pick up or release.", W // 2,
              0.54 * H, 0.9, WHITE, 2)
     shown(canvas)
-    voice.say("All set. Eyes and mouth open to move slowly. Close mouth to pick up.")
+    voice.say("All set. Eyes and mouth open to move slowly. Close mouth to pick up or release.")
     return None if wait(3.0) else (gmap, error)
 
 
@@ -813,7 +813,7 @@ def main():
     parser.add_argument("--camera", default="0", help="camera number or path (default 0; Jetson /dev/video0)")
     parser.add_argument("--reuse", action="store_true", help="skip calibration, use the saved one")
     parser.add_argument("--control", choices=("tilt", "point"), default="tilt",
-                        help="tilt: eyes and mouth open to steer slowly; close mouth to pick up (default). "
+                        help="tilt: eyes and mouth open to steer slowly; close mouth to pick up or release (default). "
                              "point: point at the table map on the screen (needs the dot calibration)")
     parser.add_argument("--pointer", choices=("head", "eyes", "both"), default="head",
                         help="head: point with your face (steady; default). eyes: eyes only, for people who "

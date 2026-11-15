@@ -4,7 +4,7 @@
 Every pull request and push to `main` runs all the tests on GitHub (`.github/workflows/tests.yml`).
 
 A robot arm that a person with severe arm paralysis controls with their head: with eyes and mouth open, the arm follows
-their nose slowly. Closing the mouth picks something up and lifts it; LET GO releases it; or by voice: speaking takes over from the face, and a few quiet seconds
+their nose slowly. Closing the mouth picks something up and lifts it; the next mouth closure after steering releases it; or by voice: speaking takes over from the face, and a few quiet seconds
 give it back. Amazon Nova finds objects and talks back (Nova 2 Sonic is the app's voice and understands free speech);
 a LangChain deepagents task agent fetches things ("bring me the banana") with a second camera over the table.
 
@@ -16,8 +16,8 @@ device, and it has not been tested with people who have disabilities.
 | Part | State |
 |---|---|
 | **Nose following** (the default): the arm follows the nose live, eyes and mouth open to steer, close the mouth to pick up | tested with the pretend arm, simulated faces and a live run (whole map reached; previous nod pick-up and nod let-go were tested; the new mouth gesture needs a camera/arm trial); **not yet tried on the real arm** |
-| Head/eye pointer (`--control point`) | Arm/pointer tested on the real arm; mouth closure after steering picks up; LET GO releases (**new gesture not yet tested on hardware**) |
-| Pick-up on the real arm | **works**: opens, lowers to 5 cm, closes, lifts, holds until LET GO or a voice drop command; gripper fixes in README steps 5c and Problems; **new mouth gesture not yet tested on hardware** |
+| Head/eye pointer (`--control point`) | Arm/pointer tested on the real arm; mouth closure after steering picks up; mouth closure while holding releases (**new gesture not yet tested on hardware**) |
+| Pick-up on the real arm | **works**: opens, lowers to 5 cm, closes, lifts, holds until the next mouth closure, LET GO or a voice drop command; gripper fixes in README steps 5c and Problems; **new mouth gesture not yet tested on hardware** |
 | Pointer accuracy | measured on one teammate only: 7.0% of the screen width on the calibration dots (head and eyes alike); `tools/measure.py` measures it properly |
 | Amazon Nova 2 Lite (find objects) | **works through Bedrock** (live call checked); used by the task agent with a table camera |
 | Amazon Nova 2 Sonic (talk back) | **works through Bedrock**: spoken replies checked; a live conversation through the speaker not yet tried |
@@ -96,9 +96,9 @@ The main features (details in the sections below):
 - **Moving the arm:** live following (default) or look-and-hold; slow speeds (60 mm/s, 40 carrying); travels 12 cm
   above the table.
 - **The arm follows your nose (the default):** live, no holding and no setup step; the nose tip measured from the
-  point between the eyes; eyes and mouth open to steer, close the mouth to pick up; LET GO releases; face centred in the window with a nose joystick.
-- **Pointer mode** (`--control point`): mouth closure to pick up; LET GO to release, big gaze buttons (and mouse clicks).
-- **A safe pick-up:** gripper opens first, lowers to 5 cm, closes, lifts and holds until LET GO or a voice drop command;
+  point between the eyes; eyes and mouth open to steer, close the mouth to pick up; mouth closure while holding releases; face centred in the window with a nose joystick.
+- **Pointer mode** (`--control point`): mouth closure to pick up or release, big gaze buttons (and mouse clicks).
+- **A safe pick-up:** gripper opens first, lowers to 5 cm, closes, lifts and holds until the next mouth closure, LET GO or a voice drop command;
   gripper opened before the arm moves at start and before it stops.
 - **Gripper fixes:** a current limit so it can't overload (setup step 5c), and a start-up check that resets its turn
   count, which had made "open" drive it closed.
@@ -208,9 +208,9 @@ position immediately and, after a brief 0.15-second confirmation, runs one compl
 lower, close on the object, and lift back to the travel height. Keeping the mouth closed does not repeat it.
 Face loss, pausing or switching to voice cannot trigger a pickup. Once pickup starts it finishes even with the
 mouth closed; explicit STOP and arm faults still interrupt it. Successful pickup shows **Holding**, not Stopped.
-Vision steering remains limited to 10 mm/s (1 cm/s), or 6 mm/s while carrying. Open your eyes and mouth again
-to carry the object. Closing the mouth while already holding it keeps it held; use LET GO or a voice drop
-command to release. The former closed-eye steering and mouth-opening grab gestures have been removed.
+Vision steering remains limited to 12.5 mm/s (1.25 cm/s), or 7.5 mm/s while carrying. Open your eyes and mouth again
+to carry the object. Closing the mouth while already holding it releases it at the current position. Open the mouth again before
+closing it for another action; keeping it closed never repeats the action. LET GO and voice drop also work. The former closed-eye steering and mouth-opening grab gestures have been removed.
 
 The default (`launch/eyereach.sh`, or `--control tilt`). Nothing to hold and no setup step: the first moment the app
 sees your face, it takes that as straight, and from then on **the arm follows your nose live**, like a mouse.
@@ -222,7 +222,7 @@ sees your face, it takes that as straight, and from then on **the arm follows yo
 | Move your nose up / down | follows away from you / toward you |
 | Move it back | comes back |
 | **Eyes + mouth open** (hold mouth open about 0.35 seconds) | enables slow head steering |
-| **Close your mouth after steering** | stops steering, lowers, grabs once, and lifts; a held object stays held |
+| **Close your mouth after steering** | stops steering, lowers, grabs once, and lifts; if already holding, releases the object instead |
 | Lose the face | stops |
 
 - **The nose guides it.** The point between your eyes is the reference, and the arm follows where your nose tip is
@@ -340,7 +340,7 @@ uses the head for the rough spot and the eyes to fine-tune. Not yet measured on 
   with the eyes). Your face and its ray are shown under the dot. The dot waits while the face is lost. If it comes out poor (over 7% of the screen width) it tries once more.
 - **Move in real time:** point at the table map and the arm follows immediately, with no movement dwell.
   A larger mirrored face panel stays to the left of the map, and one aim line connects the nose to the
-  calibrated pointer. The arm keeps its limits of 10 mm/s (6 mm/s while carrying); the pointer uses
+  calibrated pointer. The arm keeps its limits of 12.5 mm/s (7.5 mm/s while carrying); the pointer uses
   responsive adaptive smoothing. Looking at the face panel or buttons stops live following.
   Closing either eye or the mouth, losing tracking, or pausing stops new vision steering commands. Pickup/release uses robot feedback; STOP interrupts the sequence and holds the arm. STOP stays stopped until you look at MOVE AGAIN.
   Use `--movement dwell` for the previous destination-based mode.
@@ -350,9 +350,9 @@ uses the head for the rough spot and the eyes to fine-tune. Not yet measured on 
   second for closure, then lifts back to
   its travel height. **The gripper is open the rest of the time:** at start-up it opens first (and waits until it
   reports open) before the arm moves, and when the app closes it opens and waits again before the arm stops.
-  It only closes when you pick up, and then **stays closed, holding what it grabbed, until LET GO or a voice drop command**, which opens it where it is and drops the item. (The fingers' position is too unreliable
-  to tell whether something was caught, so it is only written to the session log.) Closing the mouth after eyes-open/mouth-open steering is the only pickup gesture.
-  Blinking, nodding and opening the mouth do not grab or release. Release uses LET GO or a voice drop command.
+  It only closes when you pick up, and then **stays closed, holding what it grabbed, until the next mouth closure, LET GO or a voice drop command**, which opens it where it is and drops the item. (The fingers' position is too unreliable
+  to tell whether something was caught, so it is only written to the session log.) Closing the mouth after eyes-open/mouth-open steering picks up if empty or releases if holding.
+  Blinking, nodding and opening the mouth do not grab or release. Release uses the next mouth closure after steering, LET GO or a voice drop command.
 
 - **Buttons:** PICK UP / LET GO, STOP / START, and FIX MY AIM. USE VOICE / USE VISION switches movement input hands-free. No fixed HOME or DROP-OFF
   buttons or map boxes. Buttons support gaze dwell (0.65 s by default, set with `--dwell`) and mouse clicks.
@@ -775,7 +775,7 @@ picture arrives a little late, so the arm may trail the head; the table camera o
 The launcher has its settings at the top of `launch/eyereach.sh`: it **reuses the saved calibration** (only the
 first run, or a new screen size or pointer mode, calibrates; FIX MY AIM or C recalibrates any time), and the
 fingertips **travel 120 mm** above the table and **go down to 50 mm** to pick up (the gripper opens first, closes at
-the bottom and stays closed until LET GO or a voice drop command or LET GO). Change `TRAVEL_MM`, `GRAB_MM` or
+the bottom and stays closed until the next mouth closure, LET GO or a voice drop command or LET GO). Change `TRAVEL_MM`, `GRAB_MM` or
 `REUSE` there, or override one run with `--travel-mm 120`, `--grab-mm 50` or `--calibrate`.
 
 For the real arm: turn on the 12 V power, make sure the OpenCR's USB is in the Jetson, **hold the arm** (it goes limp

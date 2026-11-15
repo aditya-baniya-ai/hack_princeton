@@ -146,7 +146,7 @@ class FreePlacementTest(unittest.TestCase):
         self.assertFalse(ctl.holding or robot.closed)
         self.assertLess(math.dist(before, robot.gripper_area()), 1.0)
 
-    def test_stays_closed_after_pickup_until_explicit_release(self):
+    def test_stays_closed_after_pickup_until_next_mouth_close_action(self):
         robot, ctl = guided()                          # the finger check says "nothing held"
         ctl.step(None, grab_action=True)
         self.assertEqual(keep_looking(ctl, None, "there", seconds=10), "there")
@@ -155,9 +155,7 @@ class FreePlacementTest(unittest.TestCase):
             time.sleep(0.02)
         self.assertTrue(ctl.holding and robot.closed)
         self.assertEqual(ctl.buttons()[0][0], "let go")
-        ctl.step(None, grab_action=True)              # closing the mouth cannot release it
-        self.assertTrue(ctl.holding and robot.closed)
-        ctl.press("let go", time.monotonic())
+        ctl.step(None, grab_action=True)              # next open/close gesture releases it
         self.assertEqual(keep_looking(ctl, None, "waiting", seconds=10), "waiting")
         self.assertFalse(ctl.holding or robot.closed)
 

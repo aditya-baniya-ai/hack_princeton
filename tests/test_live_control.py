@@ -112,8 +112,6 @@ class PickupSequenceTest(unittest.TestCase):
             robot.open_here.assert_not_called()
             self.assertEqual(ctl.events[-1][1]["gripper"], -0.008)
             ctl.close_mouth(2)
-            robot.release_here.assert_not_called()
-            ctl.press("let go", 2)
             robot.release_here.assert_called_once()
 
 

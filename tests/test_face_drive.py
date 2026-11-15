@@ -102,15 +102,23 @@ class VisionMovementTest(unittest.TestCase):
         robot.grab.assert_called_once()
         self.assertEqual(ctl.phase, 'picking')
 
-    def test_stopped_and_holding_states_cannot_trigger_another_grab_or_release(self):
+    def test_explicit_stop_blocks_both_pickup_and_release_gestures(self):
         for holding in (False, True):
             robot, ctl = self.controller()
             ctl.holding = holding
-            if not holding:
-                ctl.press('stop', 0)
+            ctl.press('stop', 0)
             ctl.step(None, now=1, grab_action=True, vision_movement=False)
             robot.grab.assert_not_called()
             robot.release_here.assert_not_called()
+
+    def test_closing_mouth_when_holding_releases_instead_of_grabbing(self):
+        robot, ctl = self.controller()
+        ctl.holding = True
+        robot.busy.return_value = True
+        ctl.step(None, now=1, grab_action=True, vision_movement=False)
+        robot.grab.assert_not_called()
+        robot.release_here.assert_called_once()
+        self.assertEqual(ctl.phase, 'letting go')
 
     def test_pickup_is_not_cancelled_when_mouth_stays_closed_or_tracking_is_lost(self):
         robot, ctl = self.controller()
@@ -132,8 +140,8 @@ class VisionMovementTest(unittest.TestCase):
         robot.halt.assert_called_once()
         self.assertFalse(ctl.live_enabled)
 
-    def test_slow_speed_limits_are_unchanged(self):
-        for holding, expected in ((False, (10.0, 0.12)), (True, (6.0, 0.08))):
+    def test_steering_speed_limits(self):
+        for holding, expected in ((False, (12.5, 0.15)), (True, (7.5, 0.10))):
             robot, ctl = self.controller()
             ctl.holding = holding
             observed = []
@@ -188,5 +196,12 @@ class CompletePickupTest(unittest.TestCase):
             for _ in range(10):
                 frame(0.05)
             self.assertEqual(len(grabs), 1)
-            self.assertTrue(ctl.holding and robot.closed)
+            self.assertFalse(ctl.holding or robot.closed)
+            self.assertEqual(ctl.phase, 'waiting')
+            self.assertTrue(ctl.live_enabled)
+            # Remaining closed never immediately picks it up again.
+            for _ in range(20):
+                frame(0.05)
+            self.assertEqual(len(grabs), 1)
+            self.assertFalse(ctl.holding or robot.closed)
             self.assertNotEqual(robot.stage, 'Stopped')

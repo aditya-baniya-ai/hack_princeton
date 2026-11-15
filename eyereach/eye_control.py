@@ -79,7 +79,7 @@ class EyeControl:
 # Guided control: for someone who can only move their eyes. Nothing moves until they choose it.
 #   look at a spot on the map and keep looking  -> the arm slowly goes there
 #   eyes and mouth open                        -> steer slowly
-#   close the mouth after steering              -> pick up here; LET GO releases
+#   close the mouth after steering              -> pick up if empty, release if holding
 #   look at a button and keep looking           -> PICK UP / LET GO, STOP, FIX MY AIM
 #   look away, close the eyes, or lose the face -> nothing new happens, the arm finishes and waits
 # ---------------------------------------------------------------------------------------------
@@ -249,13 +249,13 @@ class GuidedControl:
         if self.phase == "moving":
             return "Moving. Look at STOP or say Stop."
         if getattr(self, "tilt", False):
-            return ("Eyes + mouth open to steer. Use LET GO to release." if self.holding else
+            return ("Eyes + mouth open to steer. Close mouth to release." if self.holding else
                     "Eyes + mouth open to steer. Close mouth to pick up.")
         if self.movement == "follow":
-            return "Eyes + mouth open to move. Use LET GO to release." if self.holding else "Eyes + mouth open to move. Close mouth to pick up."
+            return "Eyes + mouth open to move. Close mouth to release." if self.holding else "Eyes + mouth open to move. Close mouth to pick up."
         if self.holding:
-            return ("Use LET GO to release here." if self.phase == "there" else
-                    "Move to where you want to put it, then use LET GO.")
+            return ("Close your mouth to release here." if self.phase == "there" else
+                    "Move to where you want to put it, then close your mouth.")
         return "Open your eyes and mouth to steer; close your mouth to pick up."
 
     def go(self, target, why, now, then=None):
@@ -433,9 +433,9 @@ class GuidedControl:
             r.glide, r.speed = glide, speed
 
     def close_mouth(self, now):
-        """Pick up once after steering; closing the mouth never drops a held object."""
-        if self.live_enabled and not self.holding and not (self.task_running or self.question):
-            self.press("pick up", now, how="mouth close")
+        """One action after steering: pick up when empty, release when holding."""
+        if self.live_enabled and not (self.task_running or self.question):
+            self.press("let go" if self.holding else "pick up", now, how="mouth close")
 
     def hold_steering(self):
         """Hold the measured position without declaring an explicit STOP or interrupting pickup."""
@@ -546,7 +546,7 @@ class GuidedControl:
             self.say.append("Ready.")
         elif self.phase == "picking" and not r.busy():
             self.accept_after = now
-            # Keep the gripper closed until LET GO or voice drop. The position-based holding guess
+            # Keep the gripper closed until the next mouth-close action, LET GO or voice drop. The position-based holding guess
             # is only logged: on the real arm it said "nothing" even when it had the object.
             detected = r.holding()
             position = getattr(r, "gripper_position", lambda: None)()
@@ -556,7 +556,7 @@ class GuidedControl:
             self.events.append(("picked", {"holding": detected, "closed": r.closed,
                                            "gripper": round(position, 4) if isinstance(position, (int, float)) else None}))
             r.stage = "Holding" if self.holding else "Ready"
-            self.say.append("Holding. Open your eyes and mouth to move; use LET GO to release.")
+            self.say.append("Holding. Open your eyes and mouth to move; close your mouth to release.")
         elif self.phase == "letting go" and not r.busy():
             self.accept_after = now
             self.holding = False
