@@ -19,8 +19,12 @@ class PickMicrophoneTest(unittest.TestCase):
         self.assertIsNone(pick([WEBCAM, SPEAKER]))                 # None = the system default, set to the webcam
 
     def test_speaker_when_there_is_no_webcam(self):
-        self.assertEqual(pick([SPEAKER]), 25)
+        self.assertEqual(pick([SPEAKER], webcam_ok=False), 25)
         self.assertEqual(pick([WEBCAM, SPEAKER], webcam_ok=False), 25)
+
+    def test_webcam_held_by_pulseaudio_still_wins(self):
+        # while PulseAudio has the webcam's microphone it is missing from PortAudio's list, but it's still there
+        self.assertIsNone(pick([SPEAKER], webcam_ok=True))
 
     def test_nothing_usable_means_the_default(self):
         self.assertIsNone(pick([SPEAKER], opens=False))

@@ -46,11 +46,16 @@ ARM_PYTHON = os.environ.get("EYEREACH_ARM_PYTHON") or next(
 PRETEND_TABLE = [{"name": "cup", "u": 0.30, "v": 0.55}, {"name": "pill bottle", "u": 0.42, "v": 0.60},
                  {"name": "phone", "u": 0.75, "v": 0.70}]
 
-SYSTEM_PROMPT = f"""You help a person who cannot move their arms. They control a robot arm with their eyes.
+from eyereach.project_context import PROJECT_CONTEXT  # noqa: E402  (what every Amazon model is told)
+
+SYSTEM_PROMPT = PROJECT_CONTEXT + f"""
+
+You are the planner that carries out the person's spoken requests ("find the cup", "bring me my pills").
 For each task, first write the plan with write_todos, then:
 1. Read your notes in {NOTES_FILE}; they may say where things usually are.
 2. Ask the perception agent (task tool) which objects are on the table and which one the person means.
-3. If it is unsure, or two objects could match, ask the person a question instead of guessing.
+3. If it offers one likely look-alike (the camera may have misnamed it), go to step 4 with that name: the
+   person's yes or no settles it. If two objects could match, or none, ask the person instead of guessing.
 4. Call ask_user_to_confirm with the object's name. Never pick before the person says yes.
    If they say no, stop and say so.
 5. pick the object, then drop it next to the person.
@@ -60,10 +65,17 @@ For each task, first write the plan with write_todos, then:
    "pills: the pill bottle, next to the cup". Use these notes on later tasks.
 Keep replies short."""
 
-PERCEPTION_PROMPT = """You find objects for a robot arm. Call list_objects, then answer with the object that
-matches the request (its exact name from the list) and where it is. If none or several match, say so."""
+PERCEPTION_PROMPT = PROJECT_CONTEXT + """
 
-CAREGIVER_PROMPT = """You keep the person's caregiver informed. Write one short, friendly sentence about what
+You find objects for the robot arm. Call list_objects, then answer with the object that
+matches the request (its exact name from the list) and where it is. The camera sometimes names a thing
+wrongly (an orange called an apple): if nothing matches exactly but one object is a likely look-alike (same
+kind of thing, similar size or colour), give that one and say it may be what was asked for. If none or
+several match, say so."""
+
+CAREGIVER_PROMPT = PROJECT_CONTEXT + """
+
+You keep the person's caregiver informed. Write one short, friendly sentence about what
 happened and send it with notify. Do not add anything that did not happen."""
 
 
@@ -91,8 +103,19 @@ class Robot:
 
     @classmethod
     def from_camera(cls, camera, **kwargs):
-        """The same, from one picture taken now by the table camera (/dev/video2 or 2)."""
+        """The same, from one picture taken now by the table camera (/dev/video2 or 2), or from the picture file
+        the eye app keeps fresh (~/.eyereach/table_camera.jpg) while it has the camera."""
         import cv2
+        if str(camera).endswith(".jpg"):
+            import time
+            path = Path(camera).expanduser()
+            for _ in range(30):                               # the app writes it every half second
+                if path.exists() and time.time() - path.stat().st_mtime < 3:
+                    image = cv2.imread(str(path))
+                    if image is not None:
+                        return cls.from_image(image, **kwargs)
+                time.sleep(0.1)
+            sys.exit(f"no fresh picture in {path} (is the eye app running with the table camera?)")
         capture = cv2.VideoCapture(int(camera) if str(camera).isdigit() else camera)
         for _ in range(5):                                    # the first frames are often dark
             ok, image = capture.read()

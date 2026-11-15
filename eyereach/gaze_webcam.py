@@ -196,7 +196,16 @@ def camera_view(frame, pts, size, ok, ray=None, frame_size=(640, 480)):
 
 
 class Camera:
+    """A camera on this computer (/dev/video0, 0), or a stream from another one (http://.../stream.mjpg, e.g. the
+    laptop's webcam from tools/laptop_camera.py). status says how it is doing, for the screen."""
+
+    def __new__(cls, source=0):
+        if str(source).startswith(("http://", "https://")) and cls is Camera:
+            return super().__new__(StreamCamera)
+        return super().__new__(cls)
+
     def __init__(self, source=0):
+        self.source = source
         source = int(source) if str(source).isdigit() else source
         self.cap = cv2.VideoCapture(source)
         if not self.cap.isOpened():
@@ -204,6 +213,7 @@ class Camera:
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        self.status = "connected"
 
     def read(self):
         ok, frame = self.cap.read()
@@ -211,6 +221,65 @@ class Camera:
 
     def close(self):
         self.cap.release()
+
+
+class StreamCamera(Camera):
+    """An MJPEG stream over HTTP, read in the background. read() gives the newest picture only (waiting a moment
+    for a fresh one), so nothing piles up and the picture stays live; None when the stream is down. It keeps
+    reconnecting, so the laptop can start streaming before or after the app."""
+
+    STALE = 1.5          # seconds without a new picture: the stream counts as down
+
+    def __init__(self, source):
+        import threading
+        self.source, self.status = source, f"waiting for {source}"
+        self.frame, self.number, self.at = None, 0, 0.0
+        self.fresh = threading.Condition()
+        self.stopped = False
+        self.thread = threading.Thread(target=self._run, name="eyereach-stream", daemon=True)
+        self.thread.start()
+
+    def _run(self):
+        import time
+        import urllib.request
+        while not self.stopped:
+            try:
+                with urllib.request.urlopen(self.source, timeout=3) as stream:
+                    buffer = b""
+                    while not self.stopped:
+                        chunk = stream.read(16384)
+                        if not chunk:
+                            break
+                        buffer += chunk
+                        end = buffer.rfind(b"\xff\xd9")               # the newest complete JPEG ...
+                        start = buffer.rfind(b"\xff\xd8", 0, end) if end > 0 else -1
+                        if start < 0:
+                            buffer = buffer[-200000:]
+                            continue
+                        jpeg, buffer = buffer[start:end + 2], buffer[end + 2:]   # ... older ones are dropped
+                        image = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+                        if image is not None:
+                            with self.fresh:
+                                self.frame, self.number, self.at = image, self.number + 1, time.monotonic()
+                                self.status = "connected"
+                                self.fresh.notify_all()
+            except Exception as error:                              # not there yet, or it went away
+                self.status = f"waiting for {self.source} ({type(error).__name__})"
+            time.sleep(1.0)
+
+    def read(self):
+        import time
+        with self.fresh:
+            seen = self.number
+            self.fresh.wait_for(lambda: self.number != seen, timeout=0.1)
+            if self.frame is None or time.monotonic() - self.at > self.STALE:
+                if self.frame is not None:
+                    self.status = f"waiting for {self.source} (no pictures)"
+                return None
+            return self.frame
+
+    def close(self):
+        self.stopped = True
 
 
 class GazeMap:

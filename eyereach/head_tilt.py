@@ -81,6 +81,7 @@ class HeadTilt:
     def __init__(self, dead=DEAD, full=FULL, hold=HOLD, flip_vertical=FLIP_VERTICAL, mode="follow"):
         self.dead, self.full, self.hold, self.flip, self.mode = dead, full, hold, flip_vertical, mode
         self.smoothed = None         # follow mode: the smoothed (lefty, pitch) in degrees
+        self.anchor = (0.5, 0.5)     # follow mode: the spot on the table that "straight" points to
         self.last_update = None      # follow mode: for the slow drift of "straight"
         self.centre = None           # (yaw, pitch) in degrees when looking straight ahead
         self.tilt_since = None       # when the current (outside the dead zone) tilt began
@@ -90,9 +91,11 @@ class HeadTilt:
         self.last_nod = -math.inf
         self.last_seen = None        # ((yaw, pitch), time) of the last face, for GRACE
 
-    def set_centre(self, yaw, pitch, roll=0.0):
-        """Degrees: the nose's reading when looking straight."""
+    def set_centre(self, yaw, pitch, roll=0.0, anchor=None):
+        """Degrees: the nose's reading when looking straight. anchor: the table spot (u, v) that straight points
+        to from now on (default the middle; the arm's own place when coming back from voice, so it doesn't jump)."""
         self.centre = (yaw, pitch, roll)
+        self.anchor = (0.5, 0.5) if anchor is None else tuple(anchor)
         self.smoothed = None
         self.tilt_since = self.tilt_side = self.dip = None
         self.dip_done = False
@@ -156,8 +159,8 @@ class HeadTilt:
         lefty, pitch = (0.0 if abs(x) < STEADY else x for x in self.smoothed)
         flip = -1 if self.flip else 1
         # the person's left (lefty > 0) is u down; up (pitch > 0) is away from them, v up
-        u = min(1.0, max(0.0, 0.5 - lefty / (2 * REACH)))
-        v = min(1.0, max(0.0, 0.5 + flip * pitch / (2 * REACH)))
+        u = min(1.0, max(0.0, self.anchor[0] - lefty / (2 * REACH)))
+        v = min(1.0, max(0.0, self.anchor[1] + flip * pitch / (2 * REACH)))
         out.target = (u, v)
         parts = [p for p, on in (("left", lefty > self.dead), ("right", lefty < -self.dead),
                                  ("away", flip * pitch > self.dead), ("toward you", flip * pitch < -self.dead)) if on]

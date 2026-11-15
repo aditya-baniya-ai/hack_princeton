@@ -122,6 +122,8 @@ def calibrate(robot, camera):
     """Visit four spots; at each, you click the table right under the fingertips in the camera view."""
     import cv2
     capture = cv2.VideoCapture(int(camera) if str(camera).isdigit() else camera)
+    capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)            # the size the eye app reads it at: same picture, same spots
+    capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     clicks, photo, table = [], [], []
     cv2.namedWindow("table camera")
     cv2.setMouseCallback("table camera", lambda event, px, py, *_: event == cv2.EVENT_LBUTTONDOWN and

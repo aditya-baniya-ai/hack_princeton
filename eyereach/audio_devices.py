@@ -61,7 +61,8 @@ def pick_microphone(override=None, rate=16000, say=print):
                 return index
         say(f"Microphone: EYEREACH_MIC={override} not found; using the system default")
         return None
-    if any(any(w in name.lower() for w in CAMERA_WORDS) for _, name in mics) and webcam_as_default():
+    # the webcam's microphone, asked of PulseAudio (while PulseAudio has it, it's missing from PortAudio's own list)
+    if webcam_as_default():
         say("Microphone: the webcam (system default)")
         return None
     for index, name in mics:

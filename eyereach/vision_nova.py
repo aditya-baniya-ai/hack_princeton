@@ -27,14 +27,22 @@ MODEL = os.environ.get("NOVA_MODEL_ID", "us.amazon.nova-2-lite-v1:0")
 REGION = os.environ.get("AWS_REGION", "us-east-1")
 TIMEOUT = 20                                   # seconds to wait for Nova's answer
 
-DETECT_PROMPT = """Find the objects on this table{only}.
+from eyereach.project_context import VISION_CONTEXT  # noqa: E402  (what the project is, short for vision)
+
+DETECT_PROMPT = VISION_CONTEXT + """
+
+Find the objects on this table{only}.
 Answer with only a JSON list, one entry per object:
 [{{"name": "cup", "box": [x1, y1, x2, y2]}}]
-Box coordinates are scaled 0 to 1000 to the image width and height. Use short everyday names.
+Box coordinates are scaled 0 to 1000 to the image width and height. Use short everyday names, as specific
+as you can tell, with the colour when it helps ("orange", "red apple", "white bottle"); look closely at
+objects partly hidden by the gripper (an orange has a dimpled orange peel; an apple is smooth and shiny).
 Only list things a robot arm could pick up: not the table, the wall or the background.
 If there are no objects, answer []."""
 
-PICK_PROMPT = """The user asked for: "{request}".
+PICK_PROMPT = VISION_CONTEXT + """
+
+The person asked for: "{request}".
 Which single object in this image is it? Answer with only a JSON object:
 {{"name": "pills", "box": [x1, y1, x2, y2], "reason": "the white bottle labelled pills"}}
 Box coordinates are scaled 0 to 1000 to the image width and height.

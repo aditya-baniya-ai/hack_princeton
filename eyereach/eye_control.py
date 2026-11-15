@@ -196,6 +196,9 @@ class GuidedControl:
         # auto mode (the app turns it on): a spoken arm command switches to voice, which stops the face from
         # moving the arm; after VOICE_IDLE quiet seconds the face controls the arm again
         self.auto_mode = False
+        self.voice_chosen = False      # the person chose voice ("use my voice", USE VOICE): no automatic return to the
+                                       # face, and the app stops tracking the face, until they say "use my face"
+        self.reanchor = False          # back to the face: the app re-takes "straight" where the arm is (no jump)
         self.voice_since = 0.0         # when voice mode began, or the last spoken command in it
         # the task agent ("bring me the banana", run by the app): it asks, the arm fetches
         self.wants_task = None         # a request for the app to hand to the agent
@@ -208,7 +211,7 @@ class GuidedControl:
     def buttons(self):
         """The buttons on screen now, top to bottom: (name, label)."""
         hand = ("let go", "LET GO") if self.holding else ("pick up", "PICK UP")
-        toggle = ("resume", "MOVE AGAIN") if not self.live_enabled else ("stop", "STOP")
+        toggle = ("resume", "START") if not self.live_enabled else ("stop", "STOP")
         mode = ("vision", "USE VISION") if self.control_mode == "voice" else ("voice", "USE VOICE")
         return [hand, toggle, mode, ("aim", "FIX MY AIM")]
 
@@ -242,13 +245,14 @@ class GuidedControl:
         if self.phase == "fault":
             return "Arm stopped: " + str(self.robot.error)
         if not self.live_enabled:
-            return "Stopped. Say Robot resume or look at MOVE AGAIN."
+            return "Stopped. Say vision or voice to go on."
         if self.control_mode == "voice":
-            return "Voice control. Say Robot move left, grab the item, or release the item."
+            return "Say left, right, closer, away, grab, drop, or vision."
         if self.phase == "moving":
             return "Moving. Look at STOP or say Stop."
         if getattr(self, "tilt", False):
-            return "Move your nose: the arm follows. Nod to let go." if self.holding else "Move your nose: the arm follows. Nod to pick up."
+            return ("Nose moves the arm. Nod to let go. Say voice." if self.holding else
+                    "Nose moves the arm. Nod to pick up. Say voice.")
         if self.movement == "follow":
             return "Point to move. Blink twice to let go." if self.holding else "Point to move. Blink twice to pick up."
         if self.holding:
@@ -269,20 +273,29 @@ class GuidedControl:
         if not self.can(name):
             return
         if name in ("voice", "vision"):
+            # chosen on purpose (a spoken mode command or the button) sticks; speaking an arm command in auto
+            # mode ("speech") or the quiet-time return ("auto") doesn't
+            self.voice_chosen = name == "voice" and how not in ("speech", "auto")
+            self.reanchor = name == "vision"
             self.gaze_latches.add("mode")
             r.halt()
             self.control_mode = name
             self.target, self.then, self.phase = None, None, "waiting"
             # voice mode is ready at once (the arm only moves on a spoken command); back to vision waits
             # for MOVE AGAIN, so the nose can't make the arm jump to where it points
-            self.live_enabled = name == "voice"
+            self.live_enabled = name == "voice" or getattr(self, "tilt", False)   # nose: re-anchored, no jump
             self.voice_since = now
             self.holding = bool(r.closed)
             r.carrying(self.holding)
             self.accept_after = now
             self.dwell = Dwell(self.dwell.seconds)
-            self.say.append("Voice mode. Say move left, move right, move closer or move away." if name == "voice" else
-                            "Vision mode. Say Robot resume, or look at MOVE AGAIN, to follow your nose.")
+            if name == "voice":
+                self.say.append("Voice mode. Face tracking is off. Say move left, move right, closer or away. "
+                                "Say use my face to go back." if self.voice_chosen else
+                                "Voice mode. Say move left, move right, move closer or move away.")
+            else:
+                self.say.append("Face control. The arm follows your nose." if getattr(self, "tilt", False) else
+                                "Vision mode. Say start, or press START, to follow your nose.")
             self.events.append(("control mode", {"mode": name, "by": how}))
         elif name == "pick up" and r.grab(self.grab_mm):
             self.target = None
@@ -360,7 +373,7 @@ class GuidedControl:
         if self.auto_mode and self.control_mode == "vision" and (task or jog or action in ("pick up", "let go")):
             if not self.can("voice"):
                 return False
-            self.press("voice", now, how="voice")          # speaking stops the face from moving the arm
+            self.press("voice", now, how="speech")         # speaking stops the face from moving the arm
         if self.control_mode == "voice":
             self.voice_since = now
         if task:
@@ -372,7 +385,7 @@ class GuidedControl:
             self.events.append(("task", {"request": action[1]}))
         elif jog:
             if self.control_mode != "voice" or not self.live_enabled:
-                self.say.append("Select USE VOICE, then MOVE AGAIN first.")
+                self.say.append("Say voice first.")
                 return False
             if not self.robot.jog(action[1], action[2]):
                 self.say.append("That movement is not available here.")
@@ -424,7 +437,8 @@ class GuidedControl:
             self.say.append(error)
             self.events.append(("arm fault", {"message": error}))
         if (self.auto_mode and self.control_mode == "voice" and self.live_enabled and self.phase in ("waiting", "there")
-                and not (self.task_running or self.wants_task or self.question) and now - self.voice_since > VOICE_IDLE):
+                and not (self.task_running or self.wants_task or self.question) and not self.voice_chosen
+                and now - self.voice_since > VOICE_IDLE):
             self.press("vision", now, how="auto")
             self.live_enabled = True                       # what the person asked for: the face takes over again
             self.say[-1:] = ["Face control again."]

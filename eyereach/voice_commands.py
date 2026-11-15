@@ -15,7 +15,8 @@ import re
 import threading
 import time
 
-MIN_CONFIDENCE = 0.70   # every word of a command must reach this (was 0.80: too many real commands dropped)
+MIN_CONFIDENCE = 0.70   # (exact phrases, kept for parse() callers)
+HEARD_CONFIDENCE = 0.5  # free speech: the sentence's average word confidence must reach this
 MODEL = Path.home() / '.eyereach' / 'models' / 'vosk-model-small-en-us-0.15'
 REPO = Path(__file__).resolve().parent.parent
 # Nova 2 Sonic's SDK needs Python 3.12: it runs as its own program in the agent's environment
@@ -45,10 +46,86 @@ for _phrase, _action in list(PHRASES.items()):
         PHRASES[_phrase[len('robot '):]] = _action
 
 
+for _phrase in ('use my voice', 'voice mode', 'switch to voice', 'use voice', 'voice control'):
+    PHRASES[_phrase] = 'voice'
+for _phrase in ('use my face', 'use my head', 'use my eyes', 'face mode', 'switch to face', 'use vision',
+                'face control'):
+    PHRASES[_phrase] = 'vision'
+
+
 def needs_voice_mode(text):
-    """A short form (no 'robot'), other than Stop: only acted on in voice mode."""
+    """A short form (no 'robot'), other than Stop and the mode phrases: only acted on in voice mode."""
     words = re.sub(r'[^a-z ]', '', text.lower()).split()
-    return bool(words) and words[0] != 'robot' and words != ['stop']
+    return bool(words) and words[0] != 'robot' and words != ['stop'] and parse(text) not in ('voice', 'vision')
+
+
+# ---- understanding ordinary sentences ------------------------------------------------------------------
+# "could you move it a bit to the left please" -> ('jog', 'left', 5.0): the key word anywhere in the sentence.
+# STOP wins over everything; then the mode words; then fetching a named thing; then grab / let go; then a direction.
+
+STOP_WORDS = {'stop', 'halt', 'freeze'}
+VOICE_WORDS = {'voice'}
+VISION_WORDS = {'vision', 'visual'}
+GRAB_WORDS = {'grab', 'pick', 'take', 'catch', 'grip', 'hold', 'close'}
+DROP_WORDS = {'drop', 'release', 'open', 'place'}
+FETCH_WORDS = {'bring', 'fetch', 'find', 'get'}
+SMALL_WORDS = {'little', 'bit', 'tiny', 'slightly', 'slight', 'small', 'touch'}
+DIRECTIONS = {'left': 'left', 'right': 'right',
+              'closer': 'toward me', 'toward': 'toward me', 'towards': 'toward me', 'back': 'toward me',
+              'backward': 'toward me', 'backwards': 'toward me', 'near': 'toward me', 'nearer': 'toward me',
+              'away': 'away from me', 'forward': 'away from me', 'forwards': 'away from me',
+              'further': 'away from me', 'farther': 'away from me', 'front': 'away from me'}
+ARM_PARTS = {'gripper', 'hand', 'claw', 'fingers', 'grip', 'on', 'tight'}   # "close the gripper": not a thing to fetch
+NOT_WORDS = {'dont', 'not', 'never', 'no'}
+FILLER = {'the', 'a', 'an', 'me', 'my', 'please', 'it', 'that', 'this', 'up', 'some', 'to', 'for', 'can', 'you',
+          'could', 'would', 'go', 'and', 'of', 'on', 'from', 'table'}
+
+
+KEYWORDS = sorted(STOP_WORDS | VOICE_WORDS | VISION_WORDS | GRAB_WORDS | DROP_WORDS | FETCH_WORDS | SMALL_WORDS |
+                  set(DIRECTIONS) | {'move', 'go', 'let', 'put', 'down', 'up', 'use', 'my', 'face', 'head', 'eyes',
+                                     'mode', 'switch', 'to', 'a', 'the', 'me', 'it', 'please', 'yes', 'no', 'not',
+                                     "don't", 'robot', 'that', 'this', 'bit', 'little', 'more', 'again',
+                                     'start', 'continue', 'resume', 'on'})
+
+
+SHORT_ACTIONS = ('stop', 'voice', 'vision', 'resume', 'yes', 'no')   # short words: the offline recogniser's job too
+
+
+def understand(text):
+    """The action meant by an ordinary sentence, or None. Only one action per sentence."""
+    words = re.sub(r"[^a-z ]", "", str(text).lower().replace("'", "")).split()
+    if not words:
+        return None
+    present = set(words)
+    if present & STOP_WORDS:
+        return 'stop'
+    if present & VOICE_WORDS or {'use', 'mouth'} <= present:
+        return 'voice'
+    if present & VISION_WORDS or ('face' in present and present & {'use', 'mode', 'switch', 'my'}) or \
+            ('head' in present and 'use' in present) or ('eyes' in present and 'use' in present):
+        return 'vision'
+    if words in (['yes'], ['yeah'], ['yep'], ['correct']) or 'thats it' in ' '.join(words):
+        return 'yes'                                      # answers to "Is it the banana?"
+    if words in (['no'], ['nope']) or 'not that' in ' '.join(words):
+        return 'no'
+    if present & NOT_WORDS:
+        return None                                       # "don't move left": nothing
+    if present & {'start', 'continue', 'resume'} or {'go', 'on'} <= present and len(words) <= 3:
+        return 'resume'                                   # carry on after a stop
+    for i, word in enumerate(words):                      # "bring me the banana", "please pick up the orange"
+        if word in FETCH_WORDS or word in GRAB_WORDS:
+            thing = [w for w in words[i + 1:] if w not in FILLER and w not in DIRECTIONS and w not in ARM_PARTS
+                     and w not in SMALL_WORDS]
+            if thing:
+                return ('task', 'the ' + ' '.join(thing[:3]))
+    if 'let' in present and 'go' in present or {'put', 'down'} <= present or present & DROP_WORDS:
+        return 'let go'
+    if present & GRAB_WORDS:
+        return 'pick up'
+    for word in words:                                    # the first direction said
+        if word in DIRECTIONS:
+            return ('jog', DIRECTIONS[word], 5.0 if present & SMALL_WORDS else 20.0)
+    return None
 
 
 def parse(text):
@@ -108,8 +185,9 @@ class VoiceInput:
             from vosk import Model, KaldiRecognizer
             if not self.model.is_dir():
                 raise RuntimeError(f'Voice model missing: {self.model}; run launch/setup_voice.sh')
-            recognizer = KaldiRecognizer(Model(str(self.model)), 16000,
-                                        json.dumps([*PHRASES, '[unk]']))
+            # a keyword vocabulary in any order (not fixed phrases): everything else is [unk], so it spots "left",
+            # "grab", "stop" inside any sentence without inventing words; understand() then finds the command
+            recognizer = KaldiRecognizer(Model(str(self.model)), 16000, json.dumps(KEYWORDS + ['[unk]']))
             recognizer.SetWords(True)
             if self.done.is_set():
                 return
@@ -131,22 +209,23 @@ class VoiceInput:
                     text = result.get('text' if final else 'partial', '')
                     if text and started is None:
                         started = stamp
-                    action = parse(text)
+                    action = understand(text) if final else None
                     # STOP may interrupt before the speaker finishes. Never use partial
                     # recognition for movement, gripping, release, or mode changes.
-                    if 'stop' in text.split() and not stopped:
+                    if set(text.split()) & STOP_WORDS and not stopped:
                         self._emit(VoiceEvent('stop', text, started or stamp, stamp))
                         stopped = True
                     if final:
                         words = result.get('result', [])
                         lowest = min((w.get('conf', 0) for w in words), default=0.0)
-                        confident = bool(words) and lowest >= MIN_CONFIDENCE
+                        average = sum(w.get('conf', 0) for w in words) / len(words) if words else 0.0
+                        confident = bool(words) and average >= HEARD_CONFIDENCE
                         self.last_heard = text
                         if confident and action is not None and action != 'stop' and not stopped:
                             self._emit(VoiceEvent(action, text, started or stamp, stamp))
                         elif text and text != '[unk]' and not stopped:
                             # Heard but not acted on: say why, so the person isn't left guessing
-                            why = 'not a command' if action is None else f'not sure ({lowest:.2f}, needs {MIN_CONFIDENCE:.2f})'
+                            why = 'no command word' if action is None else f'not sure ({average:.2f})'
                             try:
                                 self.dropped.put_nowait((text, why, round(lowest, 2)))
                             except queue.Full:
@@ -180,6 +259,17 @@ class VoiceInput:
             self.thread.join(timeout=2)
 
 
+def die_with_parent():
+    """preexec_fn for helper programs (Sonic, the agent): Linux ends them when the app ends, however it ends,
+    so no Sonic stream keeps the microphone and AWS credit after the app is gone."""
+    try:
+        import ctypes
+        import signal
+        ctypes.CDLL("libc.so.6", use_errno=True).prctl(1, signal.SIGTERM)   # 1 = PR_SET_PDEATHSIG
+    except (OSError, AttributeError):
+        pass                                                              # not Linux: close() still ends them
+
+
 class SonicInput:
     """Free speech through Nova 2 Sonic ("move it a bit to the left"), next to VoiceInput.
 
@@ -198,6 +288,7 @@ class SonicInput:
     def start(self):
         try:
             self.process = subprocess.Popen([str(self.python), '-u', '-m', 'agent.voice_sonic', '--commands'],
+                                            preexec_fn=die_with_parent,
                                             cwd=REPO, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                             stderr=sys.stderr, text=True)
         except OSError as exc:
@@ -217,6 +308,8 @@ class SonicInput:
             if 'error' in message:
                 self.error = message['error']
             action = parse('robot ' + str(message.get('command', '')))
+            if str(message.get('heard', '')).strip() and 'command' not in message and 'task' not in message:
+                action = understand(message['heard'])        # what Sonic heard, word for word: find the command
             if str(message.get('task', '')).strip():      # "bring me the banana": for the task agent
                 action = ('task', str(message['task']).strip()[:200])
                 message.setdefault('command', action[1])
@@ -248,6 +341,7 @@ class BothInputs:
 
     def __init__(self, offline, sonic):
         self.offline, self.sonic = offline, sonic
+        self.recent = []                                  # (action, when) acted on, so the other one's copy is dropped
 
     status = property(lambda self: self.offline.status)
     error = property(lambda self: self.offline.error)    # only the offline one stops the arm when it fails
@@ -268,9 +362,23 @@ class BothInputs:
     def poll(self):
         sonic = self.sonic.poll()
         until = getattr(self.offline, 'mute_until', 0.0)
-        if isinstance(until, (int, float)) and time.monotonic() < until + 2.0:
-            sonic = []                                    # likely the app's own voice coming back
-        return self.offline.poll() + sonic
+        if isinstance(until, (int, float)) and time.monotonic() < until + 0.8:
+            sonic = []                                    # likely the app's own (short) voice coming back
+        offline = self.offline.poll()
+        if self.sonic.status == 'Listening' and not self.sonic.error:
+            # Sonic writes sentences down better; the offline one keeps the short words Sonic tends to drop
+            # ("voice", "vision", "start", "stop", "yes", "no"); moves and grabs come from Sonic
+            offline = [event for event in offline if getattr(event, 'action', None) in SHORT_ACTIONS]
+        now = time.monotonic()
+        self.recent = [(action, at) for action, at in self.recent if now - at < 3.0]
+        fresh = []
+        for event in offline + sonic:                   # both heard the same thing: act once
+            action = getattr(event, 'action', event)
+            if any(action == seen for seen, _ in self.recent):
+                continue
+            self.recent.append((action, now))
+            fresh.append(event)
+        return fresh
 
     def close(self):
         self.sonic.close()

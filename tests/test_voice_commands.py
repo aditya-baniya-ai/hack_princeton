@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 import queue
 import sys
 import time
@@ -17,7 +18,7 @@ class ParserTest(unittest.TestCase):
         self.assertEqual(parse('Robot grab the item'), 'pick up')
         self.assertEqual(parse('robot release the item'), 'let go')
         self.assertEqual(parse('Stop!'), 'stop')
-        for text in ('do not robot grab', 'robot move left then right', 'move left then right', 'use voice',
+        for text in ('do not robot grab', 'robot move left then right', 'move left then right', 'use the voice',
                      'robot move left [unk]', 'robot move up', 'robot go faster', 'hello', 'fix my aim'):
             self.assertIsNone(parse(text), text)
 
@@ -218,7 +219,7 @@ class MicrophoneWorkerTest(unittest.TestCase):
         ])
         self.assertEqual([e.action for e in events], [('jog', 'right', 20.0)])
         self.assertEqual(self.run_recognition([
-            (True, {'text': 'robot grab', 'result': [{'conf': .5}]}, True)]), [])
+            (True, {'text': 'robot grab', 'result': [{'conf': .3}]}, True)]), [])   # very unsure: nothing
 
     def test_partial_stop_preempts_and_suppresses_later_action(self):
         events = self.run_recognition([
@@ -338,3 +339,134 @@ class HearsSilenceWhileTalkingTest(unittest.TestCase):
         muted, live = listener.audio.get_nowait()[1], listener.audio.get_nowait()[1]
         self.assertEqual(muted, bytes(1600))
         self.assertEqual(live, b"\x10\x20" * 800)
+
+
+class ChosenVoiceModeTest(unittest.TestCase):
+    """'Use my voice' switches to voice and stays there (no face tracking, no automatic return) until 'use my face'."""
+
+    def setUp(self):
+        from eyereach import eye_control
+        self.eye_control = eye_control
+        self.robot = eye_control.arm_link.VirtualArm()
+        self.robot.start()
+        self.ctl = eye_control.GuidedControl(self.robot, movement="follow")
+        self.ctl.tilt, self.ctl.auto_mode, self.ctl.voice_available = True, True, True
+
+    def test_the_natural_phrases_switch_from_either_mode(self):
+        from eyereach.voice_commands import needs_voice_mode
+        for text, action in (("use my voice", "voice"), ("voice mode", "voice"), ("switch to voice", "voice"),
+                             ("use my face", "vision"), ("face mode", "vision"), ("use my head", "vision")):
+            self.assertEqual(parse(text), action, text)
+            self.assertFalse(needs_voice_mode(text), text)          # they work in vision mode too
+
+    def test_chosen_voice_mode_sticks_and_coming_back_reanchors(self):
+        self.assertTrue(self.ctl.voice("voice", 1.0))
+        self.assertEqual(self.ctl.control_mode, "voice")
+        self.assertTrue(self.ctl.voice_chosen)
+        self.ctl.step(None, now=1.0 + self.eye_control.VOICE_IDLE + 30)   # long quiet: still voice
+        self.assertEqual(self.ctl.control_mode, "voice")
+        self.ctl.step(("map", (0.9, 0.9)), now=50.0)                     # the nose's spot is ignored
+        self.assertNotEqual(self.ctl.phase, "following")
+        self.assertTrue(self.ctl.voice("vision", 60.0))                  # "use my face"
+        self.assertEqual(self.ctl.control_mode, "vision")
+        self.assertFalse(self.ctl.voice_chosen)
+        self.assertTrue(self.ctl.reanchor and self.ctl.live_enabled)    # straight re-taken where the arm is
+
+    def test_speaking_an_arm_command_still_returns_to_the_face_when_quiet(self):
+        self.assertTrue(self.ctl.voice(("jog", "left", 20.0), 1.0))       # auto switch, not chosen
+        self.assertEqual(self.ctl.control_mode, "voice")
+        self.assertFalse(self.ctl.voice_chosen)
+        for i in range(60):                                               # the move takes real time to finish
+            self.ctl.step(None, now=1.0 + i * 0.25)
+            time.sleep(0.05)
+        self.assertEqual(self.ctl.phase, "waiting")
+        self.assertEqual(self.ctl.control_mode, "vision")                 # quiet for 8 s: the face again
+
+
+class AnchorTest(unittest.TestCase):
+    def test_straight_points_at_the_anchor(self):
+        from eyereach.head_tilt import HeadTilt
+        h = HeadTilt()
+        h.set_centre(0.0, 0.0, 0.0, anchor=(0.2, 0.7))                   # the arm was here
+        out = h.update((0.0, 0.0, 0.0), 1.0)
+        self.assertEqual(out.target, (0.2, 0.7))                          # no jump to the middle
+
+
+class UnderstandTest(unittest.TestCase):
+    """Ordinary sentences: the key word anywhere, no 'robot' needed."""
+
+    def test_sentences(self):
+        from eyereach.voice_commands import understand
+        cases = {
+            "move left": ('jog', 'left', 20.0), "can you move it a bit to the left please": ('jog', 'left', 5.0),
+            "go right": ('jog', 'right', 20.0), "a little closer": ('jog', 'toward me', 5.0),
+            "move it away from me": ('jog', 'away from me', 20.0), "grab it": 'pick up', "pick that up": 'pick up',
+            "let go": 'let go', "put it down": 'let go', "drop it": 'let go', "please stop moving left": 'stop',
+            "voice": 'voice', "switch to voice please": 'voice', "vision": 'vision', "use my face": 'vision',
+            "bring me the banana": ('task', 'the banana'), "find my pills": ('task', 'the pills'),
+            "yes": 'yes', "no": 'no', "don't move left": None, "what time is it": None, "hello there": None}
+        for text, action in cases.items():
+            self.assertEqual(understand(text), action, text)
+
+
+class SonicListensTest(unittest.TestCase):
+    def test_what_sonic_heard_becomes_a_command(self):
+        from eyereach.voice_commands import SonicInput
+        sonic = SonicInput()
+        sonic.read(['{"status": "Listening"}\n', '{"heard": "could you move a bit to the right"}\n',
+                    '{"heard": "how are you today"}\n'])
+        events = sonic.poll()
+        self.assertEqual([e.action for e in events], [('jog', 'right', 5.0)])
+
+    def test_no_double_commands_while_sonic_listens(self):
+        offline = Mock(status='Listening', error=None, mute_until=0.0,
+                       poll=Mock(return_value=[VoiceEvent(('jog', 'left', 20.0), 'move left', 0, 0),
+                                               VoiceEvent('stop', 'stop', 0, 0)]))
+        sonic = Mock(status='Listening', error=None,
+                     poll=Mock(return_value=[VoiceEvent(('jog', 'left', 20.0), 'move left (Sonic)', 0, 0)]))
+        actions = [e.action for e in BothInputs(offline, sonic).poll()]
+        self.assertEqual(actions, ['stop', ('jog', 'left', 20.0)])     # one move (Sonic's), the offline STOP
+
+
+class TalksLessTest(unittest.TestCase):
+    def test_short_confirmations_only(self):
+        from eyereach.run_webcam import SPEECH_LIMIT, confirmation, short_speech
+        self.assertEqual(confirmation(('jog', 'left', 20.0)), "Left.")
+        self.assertEqual(confirmation('pick up'), "Picking up.")
+        long = short_speech("Voice mode. Face tracking is off. Say move left, move right, closer or away.")
+        self.assertEqual(long, "Voice mode.")
+        self.assertLessEqual(len(short_speech("I could not find anything that looks like the banana on the table")),
+                             SPEECH_LIMIT + 1)
+
+
+class ShortWordsTest(unittest.TestCase):
+    def test_short_words_come_from_either_and_count_once(self):
+        offline = Mock(status='Listening', error=None, mute_until=0.0,
+                       poll=Mock(return_value=[VoiceEvent('voice', 'voice', 0, 0),
+                                               VoiceEvent(('jog', 'left', 20.0), 'left', 0, 0)]))
+        sonic = Mock(status='Listening', error=None,
+                     poll=Mock(return_value=[VoiceEvent('voice', 'voice (Sonic)', 0, 0)]))
+        both = BothInputs(offline, sonic)
+        self.assertEqual([e.text for e in both.poll()], ['voice'])       # offline's "voice"; Sonic's copy dropped
+        offline.poll.return_value, sonic.poll.return_value = [], [VoiceEvent('voice', 'voice (Sonic)', 0, 0)]
+        self.assertEqual(both.poll(), [])                                 # still within 3 s: not again
+
+
+class SpeechOrderTest(unittest.TestCase):
+    def test_the_agents_answer_is_read_before_the_events_are_cleared(self):
+        source = (Path(__file__).resolve().parent.parent / "eyereach" / "run_webcam.py").read_text()
+        cleared = source.index("            ctl.events = []")
+        answer = source.index('if name == "task done" and details.get("reply")')
+        self.assertLess(answer, cleared)
+
+
+class PickUpAThingTest(unittest.TestCase):
+    def test_pick_up_a_named_thing_is_a_task_for_the_agent(self):
+        from eyereach.voice_commands import understand
+        self.assertEqual(understand("please pick up the orange"), ('task', 'the orange'))
+        self.assertEqual(understand("take the cup"), ('task', 'the cup'))
+
+    def test_without_a_thing_it_is_still_just_the_gripper(self):
+        from eyereach.voice_commands import understand
+        for said in ("pick it up", "grab it", "grab", "close the gripper", "pick it up a little"):
+            self.assertEqual(understand(said), 'pick up', said)

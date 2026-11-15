@@ -79,7 +79,7 @@ Design rules for the Amazon parts:
 | NVIDIA Jetson Orin NX 16GB | Runs everything on the robot: camera, face tracking, ROS 2, the arm. |
 | ROS 2 Humble, ROBOTIS OpenMANIPULATOR-X, DYNAMIXEL servos, OpenCR | The arm and its drivers; our code sends joint paths through `arm_controller`. |
 | MediaPipe Face Mesh | 478 face points per webcam frame: the head direction (eye corners, nose, forehead, chin) and the irises. |
-| Vosk (offline) | The fixed voice commands ("Robot move left", "Stop") without the internet. |
+| Vosk (offline) | Spots the key words ("stop", "left", "grab", "voice") in any sentence without the internet. |
 | OpenCV, NumPy | The camera, the screen app and the maths. |
 | One Euro filter (Casiez et al., CHI 2012) | Keeps the pointer still when you hold still, without lag on a deliberate move. |
 
@@ -107,10 +107,89 @@ The main features (details in the sections below):
 - **Voice:** offline commands (Vosk), Amazon Nova 2 Sonic conversation (`launch/talk.sh`); the webcam's microphone
   first, the speaker's as fallback; every phrase heard is shown, with why it was ignored.
 - **Speaker volume on screen:** QUIETER / LOUDER buttons by gaze or mouse, `+`/`-` for the helper.
+- **Two cameras side by side:** the laptop's webcam streamed to the Jetson for the face (`tools/laptop_camera.py`) and
+  the USB camera on the robot; "use my voice" turns face tracking off until "use my face"; one project description
+  (`eyereach/project_context.py`) for every Amazon model.
 - **Amazon Nova 2 Lite** object finding and the **LangChain deepagents** task agent, which drives the arm
   ("grab me a banana": a table camera picture, Nova finds it, you confirm, the arm brings it).
 - **Nova 2 Sonic in the eye app:** its natural voice reads the prompts, and free speech ("a bit to the left")
   becomes commands next to the exact offline phrases.
+
+## Two cameras: the laptop watches your face, the USB camera watches the robot
+
+The screen shows both live, side by side: **ROBOT** (the Jetson's USB camera, looking at the arm and the table) and
+**YOU** (the laptop's webcam, looking at your face, big in the middle).
+
+1. **On the laptop** (once): `pip install opencv-python`, and copy the script over the USB cable:
+   `scp jetson@192.168.55.1:~/Documents/hack_princeton/tools/laptop_camera.py .`
+2. **On the laptop**, each time: `python3 laptop_camera.py` (on a Mac, allow camera access for the Terminal the first
+   time). It streams the webcam on port 8080.
+3. **On the Jetson**: `launch/eyereach.sh` as usual. `FACE_CAMERA` (top of the launcher) is the laptop's stream,
+   `http://192.168.55.100:8080/stream.mjpg` (the laptop's address over the USB cable); `TABLE_CAMERA` is
+   `/dev/video0`. Either can start first: until the laptop streams, the face picture says "Waiting for the laptop
+   camera" with the command to run, and it connects by itself.
+
+- The stream is read in the background and only the newest picture is used, so the face stays live (no growing
+  delay); measured on the Jetson: 19.8 fresh pictures a second from a 20-a-second stream, connecting in 0.08 s.
+- The robot camera is read in the background too, and the app saves its newest picture every half second to
+  `~/.eyereach/table_camera.jpg` for the task agent ("bring me the banana"), which can't open the camera while the
+  app has it.
+- `FACE_CAMERA=/dev/video0` (and `TABLE_CAMERA=""`) goes back to one USB camera on the face.
+- On the ROBOT picture (`eyereach/table_view.py`), once the table camera is calibrated
+  (`launch/eyereach.sh --agent calibrate --camera /dev/video0`):
+  - a blue **PLAYGROUND** circle on the table: 12 cm across, 15 cm in front of the arm's base, every point of it
+    within the arm's reach (with 1 cm to spare): put things in it to be picked up;
+  - **Amazon Nova 2 Lite's boxes** around what it sees, asked every 4 seconds in the background: green "can grab"
+    (in the circle), yellow "reachable", red "out of reach", with a dot where the arm would go (the same spot
+    the task agent sends it to). `--no-boxes` turns Nova's boxes off.
+
+## Talking to it: just say it
+
+No fixed phrases and no "robot" first: the app finds the key word anywhere in what you say.
+
+| Say (in any sentence) | It does |
+|---|---|
+| **voice** | voice mode: face tracking stops completely, only speech moves the arm |
+| **vision** | face mode: the arm follows your nose; speech is ignored except "voice" and "stop" |
+| **stop** | stops at once, in either mode |
+| **start** (or "go on", "continue"), or the mode word again | carries on after a stop |
+| left / right | moves left / right ("a bit", "a little": a small step) |
+| closer, toward me, back / away, forward | moves toward you / away from you |
+| grab, pick up, take | picks up |
+| drop, let go, put down, release | lets go |
+| bring me / find / get / pick up / grab + a thing | the task agent fetches it ("bring me the banana", "please pick up the orange"); "pick it up" alone just closes the gripper |
+| yes / no | answers "Is it the banana?" |
+
+"Can you move it a bit to the left please" is a small step left; "don't move left" does nothing; questions and small
+talk do nothing. (The old "Robot ..." phrases still work but are never needed.) Coming back to vision, "straight" is
+re-taken where the arm is, so it doesn't jump.
+
+**It talks very little:** only in voice mode, only after doing something, and at most 40 characters ("Left.", "Closer, a
+little.", "Picking up.", "Voice mode.", "Is it the banana?"). Vision mode is silent.
+
+**Who listens:** Amazon Nova 2 Sonic, when the AWS keys are there, writes down what you say, word for word, and the app
+finds the command in it (`voice_commands.understand`); Sonic doesn't answer back. The offline Vosk recogniser listens
+for the same key words (a 74-word vocabulary in any order, everything else ignored) and always handles "stop", even
+without the network; it does the rest only when Sonic isn't available, so a command never arrives twice. The webcam's
+microphone is used. While the app speaks, what is heard is ignored (it's short now, so that's a second or two).
+
+**Fixed on the way:** in the app, Sonic never got any sound (a name clash in `agent/voice_sonic.py` replaced its
+microphone function with a list), and the app picked the speaker's weaker microphone because PulseAudio hides the
+webcam's from the other device list. Sonic's listening session also used to answer out loud, and the app read long
+instructions aloud, which made it ignore commands said meanwhile.
+
+## What the Amazon models know about the project
+
+`eyereach/project_context.py` is the one description every Amazon model gets: EyeReach is an assistive robot arm for
+people with paralysis who can't use their arms or hands; they control a real robot arm with their nose, a nod and their
+voice; we are testing it right now with the real arm; they will say things like "find the cup", "grab the banana",
+"bring me my pills", "move left", "stop"; be patient and brief, ask when unsure, STOP always wins, never claim
+something happened. Nova 2 Sonic (talking and free speech) and the task agent get the full text; Nova 2 Lite vision
+gets a short version (`VISION_CONTEXT`), because the full one made it list nothing on a real robot-table photo where
+the short one finds the orange (and, rightly, not the robot's own circuit board). Checked: asked "What are you, and
+who is this for?", Sonic answered "I am EyeReach, the friendly voice of this robot arm, and I'm here to help people who
+can't use their arms or hands..."; asked what it can do, it listed finding, grabbing, moving and putting down, and
+said we are testing with a real robot arm right now.
 
 ## Control: the arm follows your nose, nod to pick up
 
@@ -177,19 +256,7 @@ See [Jetson voice setup and commands](docs/jetson-voice.md) for installation and
 Use `bash launch/setup_voice.sh` once, then `launch/eyereach.sh --no-arm --voice`.
 `launch/eyereach.sh` turns voice commands on by itself once they are installed; `--no-voice` keeps vision only.
 
-**Voice or vision, never both.** Say "Robot use voice" (or click USE VOICE) and only spoken commands move the arm,
-straight away: the nose and nods are ignored. In voice mode "robot" can be left out: "move left", "move right", "move
-closer" / "move back" / "come closer", "move away" / "move forward", "a little left", "grab the item", "let go". (In
-vision mode those short forms are ignored, so ordinary talk can't move anything; switching mode always needs "Robot
-use voice" / "Robot use vision".) "Robot use vision" goes back: then "Robot move left/right/..." is
-ignored and the nose moves the arm. "Stop" always works, in both.
-
-**What listens and what talks:** commands are recognised offline by **Vosk** (`vosk-model-small-en-us-0.15`, only the
-fixed phrases) on the webcam's microphone. The app talks back with the Jetson's built-in **espeak-ng** voice (through
-`spd-say`), now also when voice commands are on: while it speaks, the microphone hears silence, until 0.3 s after the
-speech really ends, so it can't take its own voice for a command (so a spoken "Stop" isn't heard during a prompt; the
-STOP button, a mouse click or Space work then). Amazon Nova 2 Sonic is the natural voice in `launch/talk.sh`, separate
-from the eye app.
+See [Talking to it](#talking-to-it-just-say-it) for what to say and who listens.
 
 **When a voice command doesn't work,** the bottom of the screen says what was heard and why it was ignored, for
 example `Heard: robot move lift - not a command` or `Heard: robot move left - not sure (0.62, needs 0.70)`; the session
@@ -255,7 +322,7 @@ uses the head for the rough spot and the eyes to fine-tune. Not yet measured on 
   to tell whether something was caught, so it is only written to the session log.) A double blink only counts
   while the head is holding still (turning
   or nodding changes how open the eyes look) and not in the first 3 s after the face appears.
-- **Buttons:** PICK UP / LET GO, STOP / MOVE AGAIN, and FIX MY AIM. USE VOICE / USE VISION switches movement input hands-free. No fixed HOME or DROP-OFF
+- **Buttons:** PICK UP / LET GO, STOP / START, and FIX MY AIM. USE VOICE / USE VISION switches movement input hands-free. No fixed HOME or DROP-OFF
   buttons or map boxes. Buttons support gaze dwell (0.65 s by default, set with `--dwell`) and mouse clicks.
 - **Speaker volume:** under the face picture, a bar with the volume and two big buttons, **QUIETER** and **LOUDER**
   (10% per press). Look and hold, like the other buttons, or click; keep looking and it keeps stepping. They always
@@ -326,7 +393,8 @@ launch/        eyereach.sh (one command: the arm and the app), talk.sh (Nova Son
                setup_jetson.sh and setup_voice.sh (one-time setup), stop.sh (stop everything),
                fix_turns.py (joint and gripper turn checks before each start)
 firmware/      servo_check: an Arduino test that stands the arm up and waves
-tools/         measure.py: gaze accuracy on 9 test dots, and timed grab trials, into results/measurements.csv
+tools/         laptop_camera.py: run ON THE LAPTOP, streams its webcam to the Jetson (the face camera)
+               measure.py: gaze accuracy on 9 test dots, and timed grab trials, into results/measurements.csv
                sim_check.py: the whole pick-up on the ROS simulation (run by launch/test_all.sh)
 services/      photon/caregiver.py: the caregiver's two-way iMessage agent (Photon 2.0 beta)
 tests/         run with: python3 -m unittest discover -s tests
@@ -400,9 +468,8 @@ One camera sees the face (the C920, or a laptop streaming its webcam), the other
 table camera once (above), then run `launch/eyereach.sh` as usual. It needs voice commands and Nova 2 Sonic on.
 
 - **The face moves the arm** while nobody is talking.
-- **Speaking takes over:** any spoken arm command ("move it a bit to the left", "Robot grab", "bring me the
-  banana") switches to voice, and the face stops moving the arm. After 8 quiet seconds (`VOICE_IDLE` in
-  `eyereach/eye_control.py`) the face controls the arm again, straight away. STOP is never undone by waiting.
+- **Say "voice" to talk to it, "vision" to go back to the face** (see [Talking to it](#talking-to-it-just-say-it));
+  "bring me the banana" works in voice mode. STOP is never undone by waiting.
 - **"Bring me the banana"** (any named thing): Sonic hands it to the task agent, which takes a picture with the table
   camera, asks Nova which object it is, and asks on screen and out loud "Is it the banana? Say yes or no". On yes,
   the app's own arm glides there, grabs it, carries it to the person and lets go, one step per frame, so the camera,

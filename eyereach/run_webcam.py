@@ -18,6 +18,9 @@ Helper keys: Esc close, C calibrate again, Space pause (the arm holds still), V 
 """
 
 import argparse
+import dataclasses
+import os
+import re
 import json
 import math
 import shutil
@@ -29,11 +32,12 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from eyereach import eye_control, speaker_volume
+from eyereach import eye_control, speaker_volume, table_view
 from eyereach.head_tilt import DEAD, NOSE_DEPTH, REACH, STEADY, HeadTilt, nose_angles
 from eyereach.agent_link import AgentLink, run_agent_messages
 from eyereach.session_log import SessionLog
-from eyereach.voice_commands import AGENT_PYTHON, BothInputs, MODEL, REPO, SonicInput, VoiceInput, needs_voice_mode
+from eyereach.voice_commands import (AGENT_PYTHON, BothInputs, MODEL, REPO, SonicInput, VoiceInput, die_with_parent,
+                                     needs_voice_mode)
 from eyereach.gaze_webcam import Camera, GazeMap, IrisGaze, OneEuro, camera_view, in_view
 
 W, H = 1280, 720                                # the picture size; set_size() changes it to the screen's
@@ -74,7 +78,19 @@ def set_size(width, height):
     """Draw everything at this size (the screen's, in full screen)."""
     global W, H, PLAY
     W, H = int(width), int(height)
-    PLAY = rect(TILT_PLAY_PART if MAP["away_up"] else PLAY_PART)
+    PLAY = tilt_map_rect() if MAP["away_up"] else rect(PLAY_PART)
+
+
+def robot_rect():
+    """Tilt control: the robot camera's picture, top left, next to the face: (left, top, width, height)."""
+    rw = int(min(0.265 * W, 0.42 * H * 4 / 3))
+    return int(0.02 * W), int(0.22 * H), rw, int(rw * 3 / 4)
+
+
+def tilt_map_rect():
+    """Tilt control: the table map, under the robot camera."""
+    left, top, rw, rh = robot_rect()
+    return int(0.03 * W), top + rh + int(0.06 * H), left + rw, int(0.95 * H)
 
 
 def face_rect():
@@ -92,6 +108,8 @@ set_size(W, H)
 def button_rects(n):
     """n buttons stacked in the button column, with gaps: [(left, top, right, bottom)]."""
     left, top, right, bottom = rect(BUTTONS_PART)
+    if MAP["away_up"]:                             # tilt control: the volume goes under the buttons
+        bottom = int(0.60 * H)
     gap = int(0.03 * H)
     height = (bottom - top - gap * (n - 1)) // n
     return [(left, top + i * (height + gap), right, top + i * (height + gap) + height) for i in range(n)]
@@ -146,8 +164,8 @@ def to_screen(u, v):
 def volume_area():
     """The volume control's area: under the face picture and its label (whose size depends on the screen)."""
     left, _, right, bottom = rect(VOLUME_PART)
-    if MAP["away_up"]:                             # tilt control: under the map, on the left
-        left, right, top = PLAY[0], PLAY[2], PLAY[3] + int(0.07 * H)
+    if MAP["away_up"]:                             # tilt control: under the buttons, on the right
+        left, right, top = int(BUTTONS_PART[0] * W), int(BUTTONS_PART[2] * W), int(0.65 * H)
     else:
         _, face_top, _, face_height = face_rect()
         top = face_top + face_height + int(0.075 * H)
@@ -300,7 +318,19 @@ def tilt_status(ctl):
     return {"centre": "Straight", "hold": "Hold the tilt...", "no face": "No face"}.get(label, "Moving " + label)
 
 
-def draw(ctl, point, tracking, paused, fps, face=None):
+def robot_panel(canvas, frame, note=""):
+    """Tilt control: the robot camera's live picture (not mirrored: it shows the robot as it is)."""
+    left, top, rw, rh = robot_rect()
+    centered(canvas, "ROBOT", left + rw // 2, top - scale(18), 0.8, WHITE, 2)
+    if frame is None:
+        cv2.rectangle(canvas, (left, top), (left + rw, top + rh), (44, 36, 36), -1)
+        centered(canvas, note or "No robot camera", left + rw // 2, top + rh // 2, 0.6, DIM, 1, max_width=0.9 * rw)
+    else:
+        paste(canvas, cv2.resize(frame, (rw, rh)), left, top)
+    cv2.rectangle(canvas, (left, top), (left + rw, top + rh), (150, 110, 130), 2)
+
+
+def draw(ctl, point, tracking, paused, fps, face=None, robot_view=None, robot_note="", face_note=""):
     """The control screen, with a dedicated face panel and a calibrated aim line."""
     canvas = blank()
     if paused:
@@ -366,13 +396,30 @@ def draw(ctl, point, tracking, paused, fps, face=None):
         cv2.rectangle(canvas, (bl, bt), (br, bb), color, 3 if on else 2)
         centered(canvas, label, (bl + br) // 2, (bt + bb) // 2 + scale(14), 1.2, color, 2, max_width=0.88 * (br - bl))
 
+    if MAP["away_up"]:                                 # tilt control: the robot camera, next to the face
+        robot_panel(canvas, robot_view, robot_note)
+
     # the face, and the ray out of the nose to where it points
     if face is not None:
         view, nose = face
         corner = face_rect()[:2]
         paste(canvas, view, *corner)
+        if face_note:                                  # the face camera isn't sending pictures
+            vw, vh = view.shape[1], view.shape[0]
+            cv2.rectangle(canvas, corner, (corner[0] + vw, corner[1] + vh), (44, 36, 36), -1)
+            centered(canvas, "Waiting for the laptop camera", corner[0] + vw // 2, corner[1] + vh // 2 - scale(16),
+                     0.8, GOLD, 2, max_width=0.9 * vw)
+            centered(canvas, face_note, corner[0] + vw // 2, corner[1] + vh // 2 + scale(22), 0.5, WHITE, 1,
+                     max_width=0.92 * vw)
         centered(canvas, "YOU", corner[0] + view.shape[1] // 2, corner[1] - scale(18), 0.8, WHITE, 2)
-        centered(canvas, "Say Robot move left" if ctl.control_mode == "voice" else tilt_status(ctl), corner[0] + view.shape[1] // 2,
+        if not getattr(ctl, "face_tracking", True):    # voice mode: the face isn't tracked at all
+            vw, vh = view.shape[1], view.shape[0]
+            shade = canvas[corner[1]:corner[1] + vh, corner[0]:corner[0] + vw]
+            shade[:] = (shade * 0.45).astype(shade.dtype)
+            centered(canvas, "FACE TRACKING OFF", corner[0] + vw // 2, corner[1] + vh // 2, 1.0, GOLD, 2)
+            centered(canvas, "voice mode", corner[0] + vw // 2, corner[1] + vh // 2 + scale(34), 0.7, WHITE, 2)
+        centered(canvas, "VOICE MODE" if ctl.control_mode == "voice" else tilt_status(ctl),
+                 corner[0] + view.shape[1] // 2,
                  corner[1] + view.shape[0] + scale(35), 0.65, GOLD, 2)
         angles = getattr(ctl, "tilt_angles", None)
         if getattr(ctl, "tilt", False) and angles is not None:   # the nose joystick, under the face picture
@@ -398,7 +445,7 @@ def draw(ctl, point, tracking, paused, fps, face=None):
             tip = (int(mid[0] + direction[0] * 0.27 * vw), int(mid[1] - direction[1] * 0.27 * vh))
             cv2.arrowedLine(canvas, mid, tip, (30, 24, 24), int(scale(14)), cv2.LINE_AA, tipLength=0.3)
             cv2.arrowedLine(canvas, mid, tip, GOLD, int(scale(8)), cv2.LINE_AA, tipLength=0.3)
-        if getattr(ctl, "tilt", False):                # which way is which, lit up while moving that way
+        if getattr(ctl, "tilt", False) and getattr(ctl, "face_tracking", True) and not face_note:   # which way is which
             label = getattr(ctl, "tilt_label", "") or ""
             vw, vh = view.shape[1], view.shape[0]
             for word, (x, y) in (("LEFT", (0.1, 0.5)), ("RIGHT", (0.9, 0.5)), ("AWAY", (0.5, 0.09)),
@@ -438,6 +485,7 @@ class Voice:
         if on and sonic and AGENT_PYTHON.exists():
             try:
                 self.sonic = subprocess.Popen([str(AGENT_PYTHON), "-u", "-m", "agent.voice_sonic", "--speak"],
+                                              preexec_fn=die_with_parent,
                                               cwd=REPO, stdin=subprocess.PIPE, text=True)
             except OSError:
                 pass
@@ -457,7 +505,7 @@ class Voice:
                 self.sonic.stdin.write(" ".join(sentence.split()) + "\n")
                 self.sonic.stdin.flush()
                 if self.listener is not None:             # about as long as Sonic takes to make it and say it
-                    self.listener.mute_until = time.monotonic() + 1.5 + len(sentence.split()) / 2.3
+                    self.listener.mute_until = time.monotonic() + 1.0 + len(sentence.split()) / 2.3
                 return
             except OSError:
                 self.sonic = None                             # Sonic stopped: spd-say from now on
@@ -537,6 +585,73 @@ def welcome(camera, gaze, shown, voice, again=False):
         shown(canvas)
         if cv2.waitKey(1) & 0xFF == 27:
             return False
+
+
+class RobotCamera:
+    """The camera looking at the robot and the table, read in the background (so it never slows the face
+    camera). Its newest picture is also saved to SHARED every half second for the task agent, which runs as its
+    own program and can't open the same camera while the app has it."""
+
+    SHARED = Path.home() / ".eyereach" / "table_camera.jpg"
+
+    def __init__(self, source):
+        self.source, self.frame, self.status, self.stopped = source, None, f"opening {source}", False
+        threading.Thread(target=self._run, name="eyereach-robot-camera", daemon=True).start()
+
+    def _run(self):
+        saved = 0.0
+        while not self.stopped:
+            try:
+                camera = Camera(self.source)
+            except RuntimeError as error:
+                self.status = str(error)
+                time.sleep(2.0)
+                continue
+            self.status = "connected"
+            while not self.stopped:
+                frame = camera.read()
+                if frame is None:
+                    self.status = f"no pictures from {self.source}"
+                    break
+                self.frame = frame
+                if time.monotonic() - saved > 0.5:
+                    saved = time.monotonic()
+                    try:
+                        self.SHARED.parent.mkdir(parents=True, exist_ok=True)
+                        part = self.SHARED.with_suffix(".part.jpg")
+                        cv2.imwrite(str(part), frame)
+                        part.replace(self.SHARED)                  # whole pictures only, never half written
+                    except OSError:
+                        pass
+            camera.close()
+            time.sleep(1.0)
+
+    def close(self):
+        self.stopped = True
+
+
+SPEECH_LIMIT = 40              # characters: the app never says more than this at once
+
+
+def short_speech(text, limit=SPEECH_LIMIT):
+    """The first sentence, cut to at most limit characters at a word boundary."""
+    text = " ".join(str(text).split())
+    first = re.split(r"(?<=[.!?])\s", text, maxsplit=1)[0]
+    if len(first) <= limit:
+        return first
+    cut = first[:limit].rsplit(" ", 1)[0].rstrip(",;:")
+    return cut + "."
+
+
+def confirmation(action):
+    """What the app says after a spoken command was done: a word or two."""
+    if isinstance(action, tuple) and action[0] == "jog":
+        way = {"left": "Left", "right": "Right", "toward me": "Closer", "away from me": "Away"}.get(action[1], "Moving")
+        return f"{way}, a little." if action[2] < 10 else f"{way}."
+    if isinstance(action, tuple) and action[0] == "task":
+        return short_speech(f"Looking for {action[1]}.")
+    return {"pick up": "Picking up.", "let go": "Letting go.", "stop": "Stopped.", "voice": "Voice mode.",
+            "yes": "Okay.", "no": "Okay, not that.", "resume": "Okay."}.get(action)
 
 
 _LOGGED = {"at": 0.0}
@@ -722,6 +837,8 @@ def main():
                         help="a second camera looking down at the table (/dev/video2, 2 or a stream address): say "
                              "'bring me the banana' and the task agent finds it with Nova and the arm brings it "
                              "(needs --voice and --sonic, and the table calibration: launch/eyereach.sh --agent calibrate)")
+    parser.add_argument("--no-boxes", action="store_true",
+                        help="don't ask Nova every few seconds what is on the table (the boxes on the robot picture)")
     parser.add_argument("--grab-mm", type=float, default=eye_control.GRAB_MM,
                         help=f"fingertips this high above the table when picking up (default {eye_control.GRAB_MM:.0f}, "
                              f"never below {eye_control.LOWEST_GRAB_MM:.0f})")
@@ -754,8 +871,25 @@ def main():
         cv2.moveWindow(WINDOW, 0, 0)
         cv2.resizeWindow(WINDOW, W, H)
         cv2.setWindowProperty(WINDOW, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-    show = lambda canvas: cv2.imshow(WINDOW, canvas)       # noqa: E731
-    robot, listener = None, None
+    import signal
+    quit_now = []                                      # Ctrl+C or kill: leave the loop; the clean-up below runs
+
+    def ask_to_quit(signum, frame):
+        quit_now.append(signum)
+        if len(quit_now) > 2:                          # asked three times: stop waiting
+            raise KeyboardInterrupt
+    signal.signal(signal.SIGINT, ask_to_quit)
+    signal.signal(signal.SIGTERM, ask_to_quit)
+    shots = os.environ.get("EYEREACH_SCREENSHOTS")       # testing: save what is drawn every 2 s into this folder
+    shot_at = [0.0]
+
+    def show(canvas):
+        cv2.imshow(WINDOW, canvas)
+        if shots and time.monotonic() - shot_at[0] > 2.0:
+            shot_at[0] = time.monotonic()
+            Path(shots).mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(Path(shots) / f"screen_{time.strftime('%H%M%S')}.jpg"), canvas)
+    robot, listener, robot_camera, table_boxes = None, None, None, None
     log = SessionLog(args.person, W, args.screen_cm, args.distance_cm, "real" if args.real else "pretend")
     log.event("pointer", mode=args.pointer)
     print(f"Logging this session to {log.path}")
@@ -795,8 +929,13 @@ def main():
             if args.sonic:
                 listener = BothInputs(listener, SonicInput().start())
             voice.listener = listener                  # it stops listening while the app talks
-            ctl.auto_mode = True                       # speaking stops the face from moving the arm; quiet, it's back
+            ctl.auto_mode = False                      # modes change only when asked ("voice" / "vision")
         agent, to_job = None, None
+        robot_camera = RobotCamera(args.table_camera) if args.table_camera else None
+        table_matrix, table_boxes = table_view.load_calibration(), None    # the PLAYGROUND circle and Nova's boxes
+        if robot_camera and not args.no_boxes and (os.environ.get("AWS_ACCESS_KEY_ID")
+                                                    or os.environ.get("AWS_BEARER_TOKEN_BEDROCK")):
+            table_boxes = table_view.TableBoxes(robot_camera)
         if args.table_camera:
             import fetch                               # brain/fetch.py (brain/ is on the path through eye_control)
             grab = max(args.grab_mm, eye_control.LOWEST_GRAB_MM)
@@ -811,9 +950,10 @@ def main():
                 print(f"Task agent: off. Calibrate the table camera once first: "
                       f"launch/eyereach.sh --agent calibrate --camera {args.table_camera}")
             if to_job:
-                agent = AgentLink(args.table_camera).start()
+                agent = AgentLink(RobotCamera.SHARED).start()   # the app has the camera; the agent gets its pictures
                 print("Task agent: on. Say 'bring me the banana'.")
         microphone_failed = False
+        asked, spoken = None, None                     # the agent's question already spoken; this frame's words
         clicks = []
 
         def mouse(event, x, y, flags, param):
@@ -827,14 +967,26 @@ def main():
         smooth, paused, last, lost_since = OneEuro(still_hz=1.2, speed_up=0.004), False, time.monotonic(), None
         view_on = True
         view_size = face_rect()[2:]
-        if args.reuse:
-            voice.say(ctl.instruction())
+        if args.reuse and head is None:
+            voice.say(short_speech(ctl.instruction()))
         while True:
-            frame, f = look(camera, gaze)
+            face_on = not (head is not None and ctl.control_mode == "voice")
+            if face_on:
+                frame, f = look(camera, gaze)
+            else:                                      # voice mode: no face tracking at all, just the picture
+                frame, f = camera.read(), None
+                gaze.pts = gaze.pose = gaze.nose = gaze.opening = None
+            ctl.face_tracking = face_on
             now = time.monotonic()
             tilt = None
             if head is not None:                       # tilt control: a face is all it needs
                 angles = head_angles(gaze)
+                if ctl.reanchor and angles is not None:          # back from voice: straight = here, no jump
+                    head.set_centre(*angles, anchor=ctl.robot.gripper_area()[:2])
+                    set_nose_centre(gaze.nose)
+                    ctl.reanchor = False
+                    log.event("tilt centre", yaw=round(angles[0], 1), pitch=round(angles[1], 1),
+                              roll=round(angles[2], 1), by="back to face")
                 if head.centre is None and angles is not None:   # straight = the middle of the first 2 s
                     centring.append((now, angles))
                     if now - centring[0][0] >= 2.0:
@@ -884,6 +1036,7 @@ def main():
                 if tilt.nod and not paused and ctl.control_mode == "vision":
                     ctl.press("let go" if ctl.holding else "pick up", now, how="nod")
             voice_acted = False
+            spoken = None
             if listener:
                 ctl.voice_available = listener.status == "Listening" and not listener.error
                 ctl.microphone_status = listener.error or listener.status
@@ -898,18 +1051,24 @@ def main():
                 # STOP wins over every other recognized action in this batch.
                 if any(event.action == "stop" for event in events):
                     ctl.voice("stop", now)
+                    spoken = confirmation("stop")
                     ctl.heard_command = "stop - accepted"
                     voice_acted = True
                     clicks.clear()
                     double = False
                 elif not paused and not listener.error:
                     for event in events:
-                        if (needs_voice_mode(event.text) and not event.text.endswith("(Sonic)")
-                                and ctl.control_mode != "voice"):
-                            ctl.heard_command = event.text + " - say Robot first (or Robot use voice)"
-                            log.event("voice command", text=event.text, accepted=False, why="short form in vision mode")
+                        if ctl.control_mode != "voice" and event.action not in ("voice", "vision", "stop", "resume"):
+                            ctl.heard_command = event.text + " - say voice first"   # vision mode: only voice/stop
+                            log.event("voice command", text=event.text, accepted=False, why="vision mode")
                             continue
+                        if event.action == ctl.control_mode:          # "vision" in vision mode: carry on if stopped
+                            if ctl.live_enabled:
+                                continue
+                            event = dataclasses.replace(event, action="resume")
                         accepted = ctl.voice(event.action, now, event.started, event.heard)
+                        if accepted:
+                            spoken = confirmation(event.action)
                         ctl.heard_command = event.text + (" - accepted" if accepted else " - ignored")
                         log.event("voice command", text=event.text, accepted=accepted)
                         if accepted:
@@ -940,20 +1099,36 @@ def main():
                 ctl.volume, volume_checked = speaker_volume.get_volume(), now
             for name, details in ctl.events:
                 log.event(name, **details)
+                if name == "task done" and details.get("reply"):   # the task agent's answer is worth saying too
+                    spoken = details["reply"]
             ctl.events = []
-            lost_since = None if tracking else (lost_since or now)
+            lost_since = None if tracking or not face_on else (lost_since or now)   # voice mode isn't "lost"
             lost = lost_since is not None and now - lost_since > 0.7     # not just a blink
-            if ctl.say:                                    # what just happened, then what to do next
-                voice.say(" ".join(ctl.say) + " " + ctl.instruction())
-                ctl.say = []
-            elif lost_since and now - lost_since > 4:
-                voice.say("I can't see your face. Please look at the screen.")
+            # speech: only in voice mode, only after something was done, and only a few words
+            if ctl.question and ctl.question != asked:
+                spoken, asked = f"Is it {ctl.question}?", ctl.question
+            elif not ctl.question:
+                asked = None
+            if ctl.control_mode == "voice" and not paused and spoken:   # only after a command: nothing else
+                line = short_speech(spoken)
+                voice.say(line)
+                log.event("said", text=line)
+            ctl.say, spoken = [], None
             face = face_panel(frame, gaze, f is not None, view_size) if view_on else None
-            canvas = draw(ctl, point if tracking else None, not lost, paused, 1 / max(now - last, 1e-3), face)
+            face_note = ""
+            if frame is None and str(args.camera).startswith(("http://", "https://")):
+                face_note = (f"On the laptop run: python3 laptop_camera.py   ({camera.status})")
+            robot_note = ("" if robot_camera is None else robot_camera.status) or "No robot camera (TABLE_CAMERA)"
+            canvas = draw(ctl, point if tracking else None, not lost or not face_on, paused,
+                          1 / max(now - last, 1e-3), face,
+                          robot_view=None if robot_camera is None else
+                          table_view.draw_table(robot_camera.frame, table_matrix, table_boxes),
+                          robot_note="No robot camera: set TABLE_CAMERA in launch/eyereach.sh" if robot_camera is None
+                          else robot_note, face_note=face_note)
             show(canvas)
             last = now
             key = cv2.waitKey(1) & 0xFF
-            if key == 27 or cv2.getWindowProperty(WINDOW, cv2.WND_PROP_VISIBLE) < 1:
+            if key == 27 or quit_now or cv2.getWindowProperty(WINDOW, cv2.WND_PROP_VISIBLE) < 1:
                 break
             if key in (ord("+"), ord("=")):
                 ctl.press("volume up", now, how="key")
@@ -977,7 +1152,7 @@ def main():
                         set_nose_centre(gaze.nose)
                         log.event("tilt centre", yaw=round(angles[0], 1), pitch=round(angles[1], 1),
                                   roll=round(angles[2], 1), by="fix aim")
-                        voice.say("Centre set.")
+                        pass                                   # quiet: vision mode doesn't talk
                     ctl.press("resume", time.monotonic())
                 else:
                     done = calibrate(camera, gaze, show, voice, args.dot_seconds, again=True, log=log)
@@ -994,6 +1169,12 @@ def main():
     finally:
         if listener:
             listener.close()
+        if voice.sonic is not None and voice.sonic.poll() is None:
+            voice.sonic.terminate()
+        if robot_camera is not None:
+            robot_camera.close()
+        if table_boxes is not None:
+            table_boxes.close()
         if agent:
             agent.close()
         if voice.sonic is not None:

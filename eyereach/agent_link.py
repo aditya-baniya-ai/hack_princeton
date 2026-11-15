@@ -23,7 +23,8 @@ class AgentLink:
 
     def start(self):
         try:
-            self.process = subprocess.Popen(
+            from eyereach.voice_commands import die_with_parent
+            self.process = subprocess.Popen(preexec_fn=die_with_parent, args=
                 [str(self.python), "-u", "-m", "agent.task_agent", "--serve", "--camera", str(self.table_camera)],
                 cwd=REPO, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=sys.stderr, text=True)
         except OSError as error:

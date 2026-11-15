@@ -38,12 +38,15 @@ REGION = os.environ.get("AWS_REGION", "us-east-1")
 VOICE = os.environ.get("SONIC_VOICE", "matthew")
 IN_RATE, OUT_RATE = 16000, 24000          # microphone in, speech out (16-bit mono both)
 CHUNK = 1024                              # microphone frames per send
-SYSTEM_PROMPT = (
-    "You are EyeReach, the friendly voice of a robot arm that helps a person who cannot move their arms. "
-    "They move the arm by pointing with their head at a map on the screen, and blink twice to pick something "
-    "up or let it go. Answer in one or two short, warm sentences. You cannot move the arm yourself, so never "
-    "say that you moved, grabbed or dropped anything. If they want the arm to stop, tell them to say Stop or "
-    "look at the STOP button.")
+try:
+    from eyereach.project_context import PROJECT_CONTEXT          # what every Amazon model is told
+except ImportError:                                               # run from elsewhere: no shared context
+    PROJECT_CONTEXT = ""
+
+SYSTEM_PROMPT = PROJECT_CONTEXT + " " + (
+    "You are EyeReach, the friendly voice of this robot arm. Answer in one or two short, warm sentences. You "
+    "cannot move the arm yourself in this conversation, so never say that you moved, grabbed or dropped "
+    "anything. If they want the arm to stop, tell them to say Stop or press the STOP button.")
 
 
 READ_ALOUD_PROMPT = ("Read the user's text aloud exactly as written, word for word, in a calm, warm voice. "
@@ -62,20 +65,26 @@ FETCH_TOOL = {"toolSpec": {
     "description": "Find a named object on the table with the camera and bring it to the person (they confirm first).",
     "inputSchema": {"json": json.dumps({"type": "object", "required": ["what"], "properties": {
         "what": {"type": "string", "description": "the object, in their words, e.g. 'the banana' or 'my pills'"}}})}}}
-COMMAND_PROMPT = (
-    "You are the voice of EyeReach, a robot arm for a person who cannot move their arms. When they ask the arm to "
+COMMAND_PROMPT = PROJECT_CONTEXT + " " + (
+    "You are the voice of EyeReach. When they ask the arm to "
     "do something, call robot_command with the closest command, one per call. For example: 'grab that' or 'pick "
     "it up' is grab; 'drop it' or 'let it go' is release; 'go left' is move left; 'a bit to the left' or 'a "
     "tiny bit left' is a little left; 'closer to me' is move toward me; 'wait' or 'hold on' is stop; 'keep "
-    "going' is resume; 'talk to you instead' or 'use my voice' is use voice; 'use my eyes' is use vision. "
+    "going' is resume; 'talk to you instead', 'use my voice' or 'voice mode' is use voice; 'use my face', "
+    "'use my head', 'use my eyes' or 'face mode' is use vision. "
     "Left and right are as the person sees it. When they ask for a named thing ('bring me the banana', 'get my "
-    "pills', 'grab me a banana'), call fetch_object with it instead; 'grab it' or 'grab that' without a name is "
+    "pills', 'grab me a banana', 'find the cup'), call fetch_object with it instead; 'grab it' or 'grab that' without a name is "
     "grab. When the screen asks them to confirm an object, 'yes', 'that's it' or 'correct' is yes, and 'no' or "
     "'not that one' is no. If you are not sure what they mean, ask one short question "
     "instead of guessing. Do not call the tool for small talk. After a tool call, reply in at most five words "
     "with what is about to happen, like 'Okay, a little left.', 'Okay, grabbing.' or 'Looking for the banana.' "
     "Nothing has happened yet when you reply: never say found, grabbed, done, moved or confirmed. "
     "Never say the word robot.")
+
+
+LISTEN_PROMPT = PROJECT_CONTEXT + " " + (
+    "In this session you only listen: the app reads what the person says and acts on it itself. Reply with one "
+    "word, 'okay', to everything, and nothing else.")
 
 
 def event(name, **body):
@@ -292,14 +301,14 @@ async def talk(microphone=None, speaker=None, commands=False):
         loop.call_soon_threadsafe(lambda: mic.full() or mic.put_nowait(bytes(data)))
 
     if commands:                                        # stdout is for the app: everything else to stderr
-        heard = [""]
-
+        # (not called "heard": that is the microphone callback above; reusing the name meant Sonic never got
+        # any sound in the eye app)
         def on_text(line):
-            if line.startswith("You:"):
-                heard[0] = line[4:].strip()
-            print(line, file=sys.stderr, flush=True)
-        session = SonicSession(system=COMMAND_PROMPT, on_text=on_text, tools=[COMMAND_TOOL, FETCH_TOOL],
-                               on_tool=command_out(heard))
+            # what the person said, word for word: the eye app finds the command in it (voice_commands.understand)
+            if line.startswith("You:") and line[4:].strip():
+                print(json.dumps({"heard": line[4:].strip()}), flush=True)
+        # Sonic only listens here: no tools (the app decides from the words) and its replies are never played
+        session = SonicSession(system=LISTEN_PROMPT, on_text=on_text)
     else:
         session = SonicSession()
     await session.start()
@@ -313,6 +322,9 @@ async def talk(microphone=None, speaker=None, commands=False):
             await session.audio(silence if time.monotonic() < speaking_until[0] else pcm)
 
     async def play():
+        if commands:                                       # listening only: drop Sonic's replies, never speak them
+            while session.active:
+                await session.audio_out.get()
         with sd.RawOutputStream(samplerate=OUT_RATE, channels=1, dtype="int16", device=speaker) as out:
             while session.active:
                 pcm = await session.audio_out.get()

@@ -23,8 +23,9 @@ class FakeBus:
 class GripperTurnTest(unittest.TestCase):
     def test_a_turn_off_is_reset_by_a_restart(self):
         bus = FakeBus(5168)                      # what the real gripper read, open
-        fix_turns.time.sleep = lambda s: None
-        fix_turns.check_gripper(bus, check_only=False)
+        from unittest.mock import patch
+        with patch.object(fix_turns.time, "sleep", lambda s: None):   # only here: time is shared by every test
+            fix_turns.check_gripper(bus, check_only=False)
         self.assertTrue(bus.rebooted)
         self.assertEqual(bus.gripper, 1072)
 
