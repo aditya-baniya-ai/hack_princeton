@@ -28,14 +28,26 @@ FOREHEAD, CHIN = 10, 152
 RAY = 1.6         # the ray out of the nose is drawn this many eye-spans long on the face picture
 
 
-def eye_opening(pts):
-    """How open the eyes are: eyelid gap / eye width, both eyes averaged (about 0.25 open, under 0.12 shut)."""
+def eye_openings(pts):
+    """Separate eyelid gap / eye width for each eye, measured along the face."""
     pts = np.asarray(pts, float)
     across = pts[LEFT["outer"]] - pts[RIGHT["outer"]]
-    h = across / np.linalg.norm(across)
+    span = np.linalg.norm(across)
+    if span < 1e-6:
+        return None
+    h = across / span
     v = np.array([-h[1], h[0]])
-    return float(np.mean([abs((pts[e["lower"]] - pts[e["upper"]]) @ v) / np.linalg.norm(pts[e["outer"]] - pts[e["inner"]])
-                          for e in (RIGHT, LEFT)]))
+    widths = [np.linalg.norm(pts[e["outer"]] - pts[e["inner"]]) for e in (RIGHT, LEFT)]
+    if min(widths) < 1e-6:
+        return None
+    return tuple(float(abs((pts[e["lower"]] - pts[e["upper"]]) @ v) / width)
+                 for e, width in zip((RIGHT, LEFT), widths))
+
+
+def eye_opening(pts):
+    """Mean eyelid opening (about 0.25 open, under 0.12 shut)."""
+    openings = eye_openings(pts)
+    return None if openings is None else float(np.mean(openings))
 
 
 def mouth_opening(pts):
@@ -133,6 +145,7 @@ class IrisGaze:
             max_num_faces=1, refine_landmarks=True,
             min_detection_confidence=0.5, min_tracking_confidence=0.3)   # keep a turned or edge face
         self.pts = None          # landmarks of the last frame (None: no face), for the camera view
+        self.eyes = None         # separate left/right eyelid openings
         self.opening = None      # how open the eyes were in the last frame (None: no face), for blinks
         self.mouth = None        # inner lip opening / mouth width (None: no face)
         self.pose = None         # head_pose() of the last frame, for the ray
@@ -145,11 +158,12 @@ class IrisGaze:
         self.size = (w, h)
         found = self.mesh.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)).multi_face_landmarks
         if not found:
-            self.pts, self.opening, self.pose, self.nose, self.mouth = None, None, None, None, None
+            self.pts, self.opening, self.pose, self.nose, self.mouth, self.eyes = (None,) * 6
             return None
         marks = found[0].landmark
         self.pts = np.array([(p.x * w, p.y * h) for p in marks])
-        self.opening = eye_opening(self.pts)
+        self.eyes = eye_openings(self.pts)
+        self.opening = None if self.eyes is None else float(np.mean(self.eyes))
         self.mouth = mouth_opening(self.pts)
         self.pose = head_pose([(p.x * w, p.y * h, p.z * w) for p in marks], (w, h))
         self.nose = nose_offset(self.pts)

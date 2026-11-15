@@ -151,7 +151,7 @@ class MouthGestureIntegrationTest(unittest.TestCase):
                 mouth = MouthOpen()
                 for ratio, now in ((0.05, 0), (0.5, 0.1), (0.5, 0.5), (0.5, 2)):
                     action = mouth.update(ratio, now)
-                    tilt_step(ctl, head.update((0, 0), now), True, False, now, mouth_action=action)
+                    tilt_step(ctl, head.update((0, 0), now), True, False, now, mouth_action=action, eyes_closed=True)
                 robot.grab.assert_called_once()
                 robot.release.assert_not_called()
                 self.assertEqual(ctl.phase, "picking")

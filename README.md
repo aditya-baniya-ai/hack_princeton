@@ -193,6 +193,13 @@ said we are testing with a real robot arm right now.
 
 ## Control: the arm follows your nose, open the mouth to pick up
 
+**Close both eyes to steer:** keep them closed for about 0.35 seconds, then tilt left/right or up/down.
+Opening either eye immediately cancels vision movement and holds the arm where it is. A short blink or a wink
+never enables steering. Losing face tracking or pausing also disables it. Vision movement is limited to
+10 mm/s (1 cm/s), or 6 mm/s while carrying, with slow joint limits too. Mouth opening still picks up/releases;
+voice commands remain available. Use the default head-tilt control for steering with your eyes closed.
+
+
 The default (`launch/eyereach.sh`, or `--control tilt`). Nothing to hold and no setup step: the first moment the app
 sees your face, it takes that as straight, and from then on **the arm follows your nose live**, like a mouse.
 
@@ -307,9 +314,9 @@ uses the head for the rough spot and the eyes to fine-tune. Not yet measured on 
   with the eyes). Your face and its ray are shown under the dot. The dot waits while the face is lost. If it comes out poor (over 7% of the screen width) it tries once more.
 - **Move in real time:** point at the table map and the arm follows immediately, with no movement dwell.
   A larger mirrored face panel stays to the left of the map, and one aim line connects the nose to the
-  calibrated pointer. The arm keeps its limits of 60 mm/s (40 mm/s while carrying); the pointer uses
+  calibrated pointer. The arm keeps its limits of 10 mm/s (6 mm/s while carrying); the pointer uses
   responsive adaptive smoothing. Looking at the face panel or buttons stops live following.
-  Closing the eyes, losing tracking, or pausing stops new movement commands. Pickup/release uses robot feedback; STOP interrupts the sequence and holds the arm. STOP stays stopped until you look at MOVE AGAIN.
+  Opening either eye, losing tracking, or pausing stops new vision movement commands. Pickup/release uses robot feedback; STOP interrupts the sequence and holds the arm. STOP stays stopped until you look at MOVE AGAIN.
   Use `--movement dwell` for the previous destination-based mode.
 - **Pick up / let go anywhere:** the fingertips start and travel about 120 mm (12 cm) above the table,
   according to the robot model. Open your mouth briefly, look at PICK UP for 0.65 s, or click it: the arm

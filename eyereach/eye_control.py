@@ -118,6 +118,22 @@ class Dwell:
         return min(1.0, progress), None
 
 
+class ClosedEyes:
+    """Hold both eyes shut to enable steering; either eye opening disables it immediately."""
+
+    def __init__(self, shut=0.12, hold=0.35):
+        self.shut, self.hold, self.since = shut, hold, None
+
+    def update(self, openings, now, enabled=True):
+        if (not enabled or openings is None or len(openings) != 2 or
+                any(not math.isfinite(x) or x < 0 or x >= self.shut for x in openings)):
+            self.since = None
+            return False
+        if self.since is None:
+            self.since = now
+        return now - self.since >= self.hold
+
+
 class MouthOpen:
     """One action per deliberate opening; close the mouth before another can fire.
 
@@ -152,11 +168,12 @@ class GuidedControl:
     is looking at; self.say holds sentences for the voice; self.events holds (name, details) for the
     session log; self.wants_calibration asks the app to re-calibrate."""
 
-    def __init__(self, robot, look=LOOK, speeds=EYE_SPEEDS, grab_mm=GRAB_MM, movement="dwell"):
+    def __init__(self, robot, look=LOOK, speeds=EYE_SPEEDS, grab_mm=GRAB_MM, movement="dwell", vision_speeds=None):
         self.robot, self.dwell = robot, Dwell(look)
         if movement not in ("follow", "dwell"):
             raise ValueError("movement must be follow or dwell")
         self.movement, self.live_enabled = movement, True
+        self.vision_speeds = vision_speeds  # optional limits for steering, independent of voice/task movements
         self.grab_mm = max(grab_mm, LOWEST_GRAB_MM)        # never closer to the table than 3 cm
         robot.set_speeds(*speeds)
         self.target = None             # the chosen map spot (u, v), or None: the arm waits
@@ -234,10 +251,10 @@ class GuidedControl:
         if self.phase == "moving":
             return "Moving. Look at STOP or say Stop."
         if getattr(self, "tilt", False):
-            return ("Nose moves the arm. Open mouth to let go. Say voice." if self.holding else
-                    "Nose moves the arm. Open mouth to pick up. Say voice.")
+            return ("Close eyes to steer. Open mouth to let go. Say voice." if self.holding else
+                    "Close eyes to steer. Open mouth to pick up. Say voice.")
         if self.movement == "follow":
-            return "Point to move. Open your mouth to let go." if self.holding else "Point to move. Open your mouth to pick up."
+            return "Close eyes to move. Open your mouth to let go." if self.holding else "Close eyes to move. Open your mouth to pick up."
         if self.holding:
             return ("Open your mouth to let go here." if self.phase == "there" else
                     "Look where to put it, then open your mouth to let go.")
@@ -404,14 +421,36 @@ class GuidedControl:
         self.events.append(("fetch", {}))
         return None
 
+    def follow_vision(self, target):
+        """Limit this steering step without changing the voice/task/gripper speed profiles."""
+        r = self.robot
+        if self.vision_speeds is None:
+            r.follow(*target)
+            return
+        glide, speed = r.glide, r.speed
+        limits = self.vision_speeds[2:] if self.holding else self.vision_speeds[:2]
+        try:
+            r.glide, r.speed = min(glide, limits[0]), min(speed, limits[1])
+            r.follow(*target)
+        finally:
+            r.glide, r.speed = glide, speed
+
     def open_mouth(self, now):
         """Opening the mouth: pick up here, or let go if holding something."""
         self.press("let go" if self.holding else "pick up", now, how="mouth")
 
-    def step(self, looking, now=None, mouth_open=False, suspended=False):
-        """One frame. looking: None, ("button", name) or ("map", (u, v)). mouth_open: a deliberate opening just fired."""
+    def step(self, looking, now=None, mouth_open=False, suspended=False, vision_movement=True):
+        """One frame. looking: None, ("button", name) or ("map", (u, v)). mouth_open: a deliberate opening just fired.
+        vision_movement: both eyes have stayed closed; gates steering, not the mouth action."""
         now = time.monotonic() if now is None else now
         r = self.robot
+        if self.control_mode == "vision" and not vision_movement:
+            # Cancel the active trajectory before updating the robot, including dwell destinations.
+            if self.phase in ("moving", "following"):
+                r.halt()
+                self.target, self.then, self.phase = None, None, "waiting"
+            if looking is not None and looking[0] == "map":
+                looking = None
         r.update()
         error = getattr(r, "error", None)
         if isinstance(error, str) and error and self.phase != "fault":
@@ -468,12 +507,12 @@ class GuidedControl:
                 self.target, self.phase = looking[1], "following"
                 if self.task_started is None:
                     self.task_started = now
-                r.follow(*self.target)
+                self.follow_vision(self.target)
             elif self.phase == "following":
                 r.halt()
                 self.target, self.phase = None, "waiting"
         if self.phase == "moving":
-            r.follow(*self.target)
+            self.follow_vision(self.target)
             u, v, _ = r.gripper_area()
             gap = math.dist((u, v), self.target)
             if gap < self.closest[0] - 0.005:
