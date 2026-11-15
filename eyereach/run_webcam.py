@@ -865,7 +865,12 @@ def main():
     parser.add_argument("--travel-mm", type=float, default=eye_control.HOVER_MM,
                         help=f"fingertips this high above the table at startup and while moving "
                              f"(default {eye_control.HOVER_MM:.0f}, at least 10 above --grab-mm)")
-    parser.add_argument("--park", action="store_true", help="after pickup, carry to the saved park position, lower and release")
+    park_modes = parser.add_mutually_exclusive_group()
+    park_modes.add_argument("--park", dest="park", action="store_true",
+                            help="require a saved park destination (otherwise saved park is used automatically)")
+    park_modes.add_argument("--no-park", dest="park", action="store_false",
+                            help="disable automatic return/drop and use manual carrying for this session")
+    parser.set_defaults(park=None)
     parser.add_argument("--park-position", type=float, nargs=2, metavar=("X_MM", "Y_MM"),
                         help="enable park with these robot-frame coordinates for this session")
     parser.add_argument("--park-drop-mm", type=float, help="fingertip release height above the table (default 50 or saved height)")
@@ -879,14 +884,8 @@ def main():
         parser.error("--speech-max-seconds must be between 0.5 and 10")
     travel = max(args.travel_mm, max(args.grab_mm, eye_control.LOWEST_GRAB_MM) + 10)
     try:
-        park_position = park.load(travel_mm=travel) if args.park and not args.park_position else None
-        if args.park_position:
-            park_position = park.position(*args.park_position, 50 if args.park_drop_mm is None else args.park_drop_mm, travel)
-            args.park = True
-        elif args.park_drop_mm is not None and park_position:
-            park_position = park.position(park_position['x'], park_position['y'], args.park_drop_mm, travel)
-        if args.park and not park_position:
-            parser.error("no saved park position: start normally, move above the drop spot and press P, or use --park-position X Y")
+        park_position = park.configure(args.park, args.park_position, args.park_drop_mm, travel)
+        args.park = park_position is not None
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -952,6 +951,11 @@ def main():
         ctl = eye_control.GuidedControl(robot, look=args.dwell, grab_mm=args.grab_mm,
                                         movement=args.movement, vision_speeds=VISION_SPEEDS)
         ctl.park_enabled, ctl.park_position = args.park, park_position
+        if park_position:
+            print(f"Park mode: ON. Every pickup returns to X={park_position['x']:.2f}, "
+                  f"Y={park_position['y']:.2f} mm; release height={park_position['drop_mm']:.0f} mm.")
+        else:
+            print("Park mode: OFF. Press P above the empty drop spot to save a destination.")
         ctl.volume, volume_checked = speaker_volume.get_volume(), time.monotonic()
         head = None
         if args.control == "tilt":                     # no screen pointer: the head's tilt moves the arm

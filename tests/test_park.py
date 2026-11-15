@@ -33,8 +33,42 @@ class ParkPositionTest(unittest.TestCase):
                 park.load(path)
 
 
+class AutomaticParkConfigTest(unittest.TestCase):
+    def test_saved_destination_is_enabled_without_a_flag(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'park.json'
+            saved = park.position(114.2721535778497, -118.93029864467701, 50)
+            park.save(saved, path)
+            self.assertEqual(park.configure(path=path), saved)
+            self.assertEqual(park.configure(True, path=path), saved)
+            self.assertIsNone(park.configure(False, path=path))
+
+    def test_missing_destination_does_not_invent_coordinates(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'park.json'
+            self.assertIsNone(park.configure(path=path))
+            with self.assertRaises(ValueError):
+                park.configure(True, path=path)
+
+    def test_saved_release_height_can_be_overridden_without_moving_xy(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'park.json'
+            park.save(park.position(162, 20, 50), path)
+            self.assertEqual(park.configure(drop_mm=45, path=path), park.position(162, 20, 45))
+
+    def test_invalid_saved_destination_fails_instead_of_using_another_drop_spot(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'park.json'
+            path.write_text('{"x":400,"y":0,"drop_mm":50}')
+            with self.assertRaises(ValueError):
+                park.configure(path=path)
+            self.assertIsNone(park.configure(False, path=path))
+        with self.assertRaises(ValueError):
+            park.configure(False, coordinates=(162, 20))
+
+
 class ParkSequenceTest(unittest.TestCase):
-    def simulate(self, enabled=True, pickup_area=(0.4, 0.45), stop_during=None):
+    def simulate(self, enabled=True, pickup_area=(0.4, 0.45), stop_during=None, destination=None):
         clock = [10.0]
         stages = []
         with patch.object(arm_link.time, 'monotonic', side_effect=lambda: clock[0]):
@@ -45,7 +79,7 @@ class ParkSequenceTest(unittest.TestCase):
             initial = robot.hover_joints(*arm_link.area_to_point(*pickup_area))
             robot.state = robot.command = list(initial)
             ctl = ec.GuidedControl(robot, movement='follow', vision_speeds=VISION_SPEEDS)
-            ctl.park_position = park.position(162, 20, 45)
+            ctl.park_position = park.position(162, 20, 45) if destination is None else destination
             ctl.park_enabled = enabled
             releases, grabs = [], []
             release, grab = robot.release, robot.grab
@@ -94,6 +128,19 @@ class ParkSequenceTest(unittest.TestCase):
                 self.assertEqual(ctl.phase, 'waiting')
                 self.assertEqual(stages.count('Stopped'), 0)
                 self.assertTrue(any(name == 'parked' and not details['problem'] for name, details in ctl.events))
+
+    def test_automatically_loaded_jetson_destination_receives_the_pickup(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'park.json'
+            park.save(park.position(114.2721535778497, -118.93029864467701, 50), path)
+            destination = park.configure(path=path)
+            robot, ctl, _, releases, grabs, saw_park = self.simulate(destination=destination)
+            self.assertTrue(saw_park)
+            self.assertEqual(len(grabs), 1)
+            self.assertEqual(len(releases), 1)
+            self.assertLess(math.dist(releases[0][:2], (destination['x'], destination['y'])), 4)
+            self.assertEqual(releases[0][3], 50)
+            self.assertFalse(ctl.holding or robot.closed or ctl.parking)
 
     def test_mode_off_keeps_manual_pickup_behavior(self):
         robot, ctl, _, releases, grabs, saw_park = self.simulate(enabled=False)

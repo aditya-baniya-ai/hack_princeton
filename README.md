@@ -218,10 +218,10 @@ said we are testing with a real robot arm right now.
 
 ## Park mode: return and drop after each pickup
 
-Park mode is optional. After a completed pickup, the arm carries the object at travel height to the
+Park mode turns on automatically whenever a saved destination exists. After a completed pickup, the arm carries the object at travel height to the
 saved X/Y destination, lowers to the park release height, opens the gripper and lifts again. Mouth/eye
 steering is suspended during this automatic sequence; STOP still interrupts it. Normal manual pickup/release
-remains the default when park mode is off. Agent pickups inside the app also use the park destination when enabled.
+is available with `--no-park` or when no destination has been saved. Agent pickups inside the app also use the park destination when enabled.
 
 **Set the destination from the arm:** start the app normally, move the empty gripper above the intended
 tray/drop spot, then have the helper press **P** while it is above that spot. The app holds the arm,
@@ -229,10 +229,10 @@ saves the measured X/Y position, and enables park mode. Press START or say “vi
 The saved position is in `~/.eyereach/park.json`; the release height defaults to 50 mm above the table.
 Press P only while the gripper is empty and the arm is not picking up, releasing or fetching.
 
-**Use the saved destination next time:**
+**Use the saved destination next time (automatically enabled):**
 
 ```bash
-./launch/eyereach.sh --park
+./launch/eyereach.sh
 ```
 
 **Enter coordinates directly** for one session instead:
@@ -246,7 +246,7 @@ the robot's left. The example is illustrative; use your own tray location. `--pa
 fingertip height above the table when releasing, with a minimum of 30 mm. You can also combine it with
 `--park` to override the saved release height. Destinations and lowering paths are checked for reachability.
 To use a different release height when saving with P, start with `--park-drop-mm HEIGHT` before pressing P.
-Restart without `--park` or `--park-position` to return to manual mode. New park behavior has been checked
+Use `./launch/eyereach.sh --no-park` to return to manual carrying for one session. `--park` is still accepted and requires a saved destination. New park behavior has been checked
 with the simulated arm; it still needs a real camera/arm trial.
 
 ## Control: the arm follows your nose, eyes and mouth open to steer, close the mouth to pick up

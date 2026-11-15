@@ -43,6 +43,23 @@ def load(path=None, travel_mm=120.0):
         raise ValueError(f'cannot load park position: {exc}') from exc
 
 
+def configure(enabled=None, coordinates=None, drop_mm=None, travel_mm=120.0, path=None):
+    """Automatically use a saved destination unless park was explicitly disabled."""
+    if enabled is False:
+        if coordinates is not None:
+            raise ValueError('--no-park cannot be combined with --park-position')
+        return None
+    if coordinates is not None:
+        saved = position(*coordinates, 50.0 if drop_mm is None else drop_mm, travel_mm)
+    else:
+        saved = load(path, travel_mm)
+        if saved is not None and drop_mm is not None:
+            saved = position(saved['x'], saved['y'], drop_mm, travel_mm)
+    if enabled is True and saved is None:
+        raise ValueError('no saved park position: move above the drop spot and press P, or use --park-position X Y')
+    return saved
+
+
 def save(saved, path=None, travel_mm=120.0):
     saved = position(saved['x'], saved['y'], saved['drop_mm'], travel_mm)
     path = PARK_FILE if path is None else Path(path)
