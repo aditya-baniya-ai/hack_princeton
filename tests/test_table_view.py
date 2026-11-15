@@ -17,7 +17,7 @@ class TableViewTest(unittest.TestCase):
         cx, cy, r = tv.PLAYGROUND_MM
         self.assertGreaterEqual(r, 50)                                   # at least 10 cm across
         for angle in numpy.linspace(0, 2 * numpy.pi, 72):
-            for d in numpy.linspace(0, r + tv.MARGIN_MM - 1, 8):         # even 1 cm past the edge
+            for d in numpy.linspace(0, r + tv.MARGIN_MM - 1, 8):         # check the remaining margin beyond the blue edge
                 x, y = cx + d * numpy.cos(angle), cy + d * numpy.sin(angle)
                 self.assertTrue(tv.reachable(x, y), (x, y))
 
@@ -28,7 +28,8 @@ class TableViewTest(unittest.TestCase):
 
     def test_colours_say_where_a_thing_is(self):
         self.assertEqual(tv.verdict(MATRIX, 0.5, 0.65)[1], "can grab")     # (164, 0) mm: the middle
-        self.assertEqual(tv.verdict(MATRIX, 0.5, 0.25)[1], "reachable")    # (100, 0): just before it
+        self.assertEqual(tv.verdict(MATRIX, 0.5, 0.25)[1], "can grab")     # (100, 0): inside the enlarged edge
+        self.assertEqual(tv.verdict(MATRIX, 0.5, 0.2125)[1], "reachable") # (94, 0): just outside it
         self.assertEqual(tv.verdict(MATRIX, 0.5, 0.1)[1], "out of reach")  # (76, 0): too near the base
         self.assertEqual(tv.verdict(MATRIX, 0.0, 1.0)[1], "out of reach")  # (220, -150): too far
 

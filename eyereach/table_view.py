@@ -23,9 +23,9 @@ import arm_link  # noqa: E402
 
 CALIBRATION = Path.home() / ".eyereach" / "table_camera.json"     # written by brain/fetch.py calibrate
 # The PLAYGROUND circle on the table, in mm from the arm (x straight ahead, y to the arm's left): the biggest circle
-# inside the arm's reach (arm_link.NEAR to FAR from the base, SIDE either way), 1 cm in from its edges.
-MARGIN_MM = 10.0
-PLAYGROUND_RADIUS_MM = (arm_link.FAR - arm_link.NEAR) / 2 - MARGIN_MM                        # 60 mm
+# inside the arm's reach (arm_link.NEAR to FAR from the base, SIDE either way), 5 mm in from its edges.
+MARGIN_MM = 5.0
+PLAYGROUND_RADIUS_MM = (arm_link.FAR - arm_link.NEAR) / 2 - MARGIN_MM                        # 65 mm
 PLAYGROUND_MM = (arm_link.arm.BASE_X + (arm_link.FAR + arm_link.NEAR) / 2, 0.0, PLAYGROUND_RADIUS_MM)  # x, y, r
 DETECT_EVERY = 4.0                                 # seconds between Nova's looks (each takes about 4 s)
 BLUE, GREEN, YELLOW, RED, WHITE = (255, 120, 0), (60, 220, 60), (0, 210, 255), (60, 60, 255), (255, 255, 255)

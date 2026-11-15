@@ -4,8 +4,9 @@
 Every pull request and push to `main` runs all the tests on GitHub (`.github/workflows/tests.yml`).
 
 A robot arm that a person with severe arm paralysis controls with their head: the arm follows their nose, opening the mouth picks
-something up and opening it again puts it down; or by voice. Amazon Nova finds objects and talks back (Nova 2 Sonic is the
-app's voice); a LangChain deepagents task agent fetches things ("grab me a banana").
+something up and opening it again puts it down; or by voice: speaking takes over from the face, and a few quiet seconds
+give it back. Amazon Nova finds objects and talks back (Nova 2 Sonic is the app's voice and understands free speech);
+a LangChain deepagents task agent fetches things ("bring me the banana") with a second camera over the table.
 
 Built at HackPrinceton Fall 2026 (Nov 13-15, 2026). This is a research prototype, not a medical
 device, and it has not been tested with people who have disabilities.
@@ -14,15 +15,16 @@ device, and it has not been tested with people who have disabilities.
 
 | Part | State |
 |---|---|
-| **Nose following** (the default): the arm follows the nose live, open the mouth to pick up | tested with the pretend arm, simulated faces and a live run (whole map reached, previous nod pick-up and nod let-go were tested; the new mouth gesture needs a camera/arm trial); **not yet tried on the real arm** |
+| **Nose following** (the default): the arm follows the nose live, open the mouth to pick up | tested with the pretend arm, simulated faces and a live run (whole map reached; previous nod pick-up and nod let-go were tested; the new mouth gesture needs a camera/arm trial); **not yet tried on the real arm** |
 | Head/eye pointer (`--control point`) | Arm/pointer tested on the real arm; mouth opening now picks up and lets go (**new gesture not yet tested on hardware**) |
 | Pick-up on the real arm | **works**: opens, lowers to 5 cm, closes, lifts, holds until the next mouth opening; gripper fixes in README steps 5c and Problems; **new mouth gesture not yet tested on hardware** |
 | Pointer accuracy | measured on one teammate only: 7.0% of the screen width on the calibration dots (head and eyes alike); `tools/measure.py` measures it properly |
 | Amazon Nova 2 Lite (find objects) | **works through Bedrock** (live call checked); used by the task agent with a table camera |
 | Amazon Nova 2 Sonic (talk back) | **works through Bedrock**: spoken replies checked; a live conversation through the speaker not yet tried |
 | Nova 2 Sonic as the eye app's voice | built: reads the app's prompts aloud (live call checked: 2.5 s of speech in 2.7 s); not yet heard on the Jetson |
-| Nova 2 Sonic free speech | built: "move it a bit to the left" -> `a little left`, "pick that up please" -> `grab` (live calls checked, typed); through the microphone in the app not yet tried |
-| Task agent (LangChain deepagents) | built and tested with Nova 2 Lite as its model; **drives the arm** with `--arm` (pretend arm tested; the real arm and the table camera not yet tried) |
+| Nova 2 Sonic free speech | built: "move it a bit to the left" -> `a little left`, "pick that up please" -> `grab`, "can you grab me a banana" -> fetch the banana, "yes, that's it" -> `yes`, "not that one" -> `no` (live calls checked, typed); through the microphone in the app not yet tried |
+| Task agent (LangChain deepagents) | built and tested with Nova 2 Lite as its model; **drives the arm**, on its own (`--agent`) or inside the eye app (pretend arm tested; the real arm and the table camera not yet tried) |
+| **One session: face, voice and the agent** | built: the face moves the arm; a spoken command switches to voice (the face stops), 8 quiet seconds give it back; "bring me the banana" asks "is it the banana?" and fetches it, with STOP working throughout. Tested on the pretend arm (a full fetch, and STOP mid-fetch); **not yet on the Jetson** |
 | Photon caregiver messages | the two-way iMessage agent is built (`services/photon/caregiver.py`, `eyereach/notify.py`); **not yet called by the app or the task agent** (its `notify` still prints); needs a Photon beta key |
 | HoloLens 2 gaze input | not built |
 | Tested with people who have disabilities | no |
@@ -36,12 +38,12 @@ use their arms. Special tracks, and how each connects. The status column says wh
 |---|---|---|
 | **Best Hardware** | A physical system: OpenMANIPULATOR-X arm, OpenCR board, Jetson Orin NX, a webcam and a USB speaker with a microphone, wired and driven by our own control code. | **Working on the real arm** |
 | **Best Physical AI** | AI that acts in the real world: face/eye tracking (MediaPipe Face Mesh) decides where a physical arm goes, with height, speed and reach limits on every move. | **Working on the real arm** |
-| **Amazon: Best Practical AI (Nova)** | Three Amazon Nova uses, all on Bedrock (see [Amazon technology](#amazon-technology-we-use)): Nova 2 Lite names the objects on the table and boxes them, Nova 2 Lite is the task agent's brain, and Nova 2 Sonic listens and talks back. Nova's answers are only suggestions: the user still confirms before anything moves. | All three work through Bedrock and are wired in; tried on the pretend arm, **not yet on the real arm** |
-| **LangChain deepagents** | An agent turns a task ("bring me the pills") into steps: find the object, ask the user to confirm with their eyes, pick, drop, tell the caregiver. Human in the loop: `pick` refuses until the user confirmed that exact object. | Built and tested; picks with the arm through `brain/fetch.py` (pretend arm tested) |
+| **Amazon: Best Practical AI (Nova)** | Three Amazon Nova uses, all on Bedrock (see [Amazon technology](#amazon-technology-we-use)): Nova 2 Lite names the objects on the table and boxes them, Nova 2 Lite is the task agent's brain, and Nova 2 Sonic listens and talks back. Nova's answers are only suggestions: the user still confirms before anything moves. | All three work through Bedrock and are wired into the eye app; tried on the pretend arm, **not yet on the real arm** |
+| **LangChain deepagents** | An agent turns a task ("bring me the pills") into steps: find the object, ask the person to confirm (on screen and out loud: "is it the pills? say yes or no"), pick, drop, tell the caregiver. Human in the loop: `pick` refuses until the person confirmed that exact object. | Built and tested; runs inside the eye app and fetches with its arm (pretend arm tested) |
 | **Photon (spectrum-ts)** | A caregiver gets iMessages about what the arm did, can text STOP / RESUME / STATUS, and can ask "did he take his pills?" (Nova answers from the day's event log). | Agent built; **not yet wired to the app or the task agent** |
 
-Next: try the agent on the real arm with a table camera (a second camera looking down at the table, calibrated once
-with `launch/eyereach.sh --agent calibrate`), then Photon. Further ahead: HoloLens 2 gaze input, so the user
+Next: try it all on the Jetson with two cameras (face, and one looking down at the table, calibrated once with
+`launch/eyereach.sh --agent calibrate`), then call Photon from the app (caregiver messages, and its STOP). Further ahead: HoloLens 2 gaze input, so the user
 looks at real objects instead of a screen map.
 
 ## Amazon technology we use
@@ -53,7 +55,7 @@ Everything Amazon runs on **Amazon Bedrock** in `us-east-1`, with one IAM access
 |---|---|---|---|
 | **Amazon Nova 2 Lite** (`us.amazon.nova-2-lite-v1:0`) | Looks at a camera picture and lists the objects a robot could pick up, each with a box; or says which object a request ("the pills") means, or that it isn't sure | Bedrock **Converse API** with the image (boto3 `bedrock-runtime`), one call per picture, no retries | `eyereach/vision_nova.py` |
 | **Amazon Nova 2 Lite** as an agent model | The "brain" of the task agent: plans the steps, calls the tools, writes notes | LangChain `init_chat_model("bedrock_converse:…")` (langchain-aws) | `agent/task_agent.py` |
-| **Amazon Nova 2 Sonic** (`amazon.nova-2-sonic-v1:0`) | Speech to speech: hears the person through the microphone and answers out loud in a natural voice (voice `matthew`) | Bedrock **bidirectional streaming** (`InvokeModelWithBidirectionalStream`) with Amazon's Python SDK `aws_sdk_bedrock_runtime` (needs Python 3.12) | `agent/voice_sonic.py`, `launch/talk.sh` |
+| **Amazon Nova 2 Sonic** (`amazon.nova-2-sonic-v1:0`) | Speech to speech: the eye app's voice (reads its prompts), and free speech in the app: with **tool use** it turns "a bit to the left" into a command from a fixed list, and "bring me the banana" into a task for the agent; also a chat in `launch/talk.sh` (voice `matthew`) | Bedrock **bidirectional streaming** (`InvokeModelWithBidirectionalStream`) with Amazon's Python SDK `aws_sdk_bedrock_runtime` (needs Python 3.12) | `agent/voice_sonic.py`, `launch/talk.sh` |
 | **Amazon Bedrock** | Hosts all three models; one key, one region | IAM keys from `.env` | — |
 
 Not used, on purpose: **Amazon Polly** and **Amazon Transcribe**. Nova 2 Sonic already listens and speaks in one model,
@@ -65,6 +67,7 @@ Design rules for the Amazon parts:
 - **Nova suggests, the person decides.** The agent's `pick` refuses until the person confirmed that exact object.
 - **Sonic never moves the arm itself.** In free speech it can only pick a command from the same fixed list as the
   offline phrases, and the app checks it like any spoken command (it refuses moves that aren't possible right now).
+  A fetch request only starts the agent, which still needs the person's yes for that exact object.
   It stops listening while it speaks so it can't hear itself, and it never says "robot", so the offline listener
   can't mistake its replies for commands.
 - **Few calls.** One Nova call per picture, no retries; one Sonic call per spoken prompt (newer prompts replace
@@ -74,7 +77,7 @@ Design rules for the Amazon parts:
 
 | Technology | What it does in EyeReach |
 |---|---|
-| **LangChain deepagents** (sponsor) | `create_deep_agent` with two sub-agents (perception finds the object, caregiver writes the message), a notes file it keeps between runs (`FilesystemBackend`, `~/.eyereach/agent/notes.md`), and a written plan (`TodoListMiddleware`, `write_todos`). Model: Amazon Nova 2 Lite through `langchain-aws`. Runs in its own Python 3.12 environment (`~/eyereach_agent_venv`, made with `uv`), so ROS's Python 3.10 is untouched. |
+| **LangChain deepagents** (sponsor) | `create_deep_agent` with two sub-agents (perception finds the object, caregiver writes the message), a notes file it keeps between runs (`FilesystemBackend`, `~/.eyereach/agent/notes.md`), and a written plan (`TodoListMiddleware`, `write_todos`). Model: Amazon Nova 2 Lite through `langchain-aws`. Runs in its own Python 3.12 environment (`~/eyereach_agent_venv`, made with `uv`), so ROS's Python 3.10 is untouched; inside the eye app it is its own program that asks the app to confirm and to pick (`--serve`). |
 | **Photon spectrum-ts** (sponsor) | The caregiver's two-way iMessage agent (`services/photon/caregiver.py`); not yet called by the app or the task agent. |
 | NVIDIA Jetson Orin NX 16GB | Runs everything on the robot: camera, face tracking, ROS 2, the arm. |
 | ROS 2 Humble, ROBOTIS OpenMANIPULATOR-X, DYNAMIXEL servos, OpenCR | The arm and its drivers; our code sends joint paths through `arm_controller`. |
@@ -114,6 +117,12 @@ The main features (details in the sections below):
   ("grab me a banana": a table camera picture, Nova finds it, you confirm, the arm brings it).
 - **Nova 2 Sonic in the eye app:** its natural voice reads the prompts, and free speech ("a bit to the left")
   becomes commands next to the exact offline phrases.
+- **Face and voice share the arm by themselves:** speak an arm command and the face stops moving the arm; after 8
+  quiet seconds the face has it again. No "use voice" step. STOP stays stopped.
+- **Two cameras, one session:** the face camera (the C920, or a laptop streaming its webcam) and a table camera.
+  "Bring me the banana": the agent takes a table picture, Nova finds it, the app asks "is it the banana?", and on yes
+  the arm brings it, one step per frame so the camera, the STOP button and voice STOP keep working
+  (`eyereach/agent_link.py`, `brain/fetch.py`). One calibration maps the table camera to the arm (click 10 nearby spots).
 
 ## Two cameras: the laptop watches your face, the USB camera watches the robot
 
@@ -137,8 +146,8 @@ The screen shows both live, side by side: **ROBOT** (the Jetson's USB camera, lo
 - `FACE_CAMERA=/dev/video0` (and `TABLE_CAMERA=""`) goes back to one USB camera on the face.
 - On the ROBOT picture (`eyereach/table_view.py`), once the table camera is calibrated
   (`launch/eyereach.sh --agent calibrate --camera /dev/video0`):
-  - a blue **PLAYGROUND** circle on the table: 12 cm across, 15 cm in front of the arm's base, every point of it
-    within the arm's reach (with 1 cm to spare): put things in it to be picked up;
+  - a blue **PLAYGROUND** circle on the table: 13 cm across, 15 cm in front of the arm's base, every point of it
+    within the arm's reach (with 5 mm to spare): put things in it to be picked up;
   - **Amazon Nova 2 Lite's boxes** around what it sees, asked every 4 seconds in the background: green "can grab"
     (in the circle), yellow "reachable", red "out of reach", with a dot where the arm would go (the same spot
     the task agent sends it to). `--no-boxes` turns Nova's boxes off.
@@ -198,7 +207,6 @@ Opening either eye immediately cancels vision movement and holds the arm where i
 never enables steering. Losing face tracking or pausing also disables it. Vision movement is limited to
 10 mm/s (1 cm/s), or 6 mm/s while carrying, with slow joint limits too. Mouth opening still picks up/releases;
 voice commands remain available. Use the default head-tilt control for steering with your eyes closed.
-
 
 The default (`launch/eyereach.sh`, or `--control tilt`). Nothing to hold and no setup step: the first moment the app
 sees your face, it takes that as straight, and from then on **the arm follows your nose live**, like a mouse.
@@ -265,6 +273,9 @@ Use `bash launch/setup_voice.sh` once, then `launch/eyereach.sh --no-arm --voice
 
 See [Talking to it](#talking-to-it-just-say-it) for what to say and who listens.
 
+When the agent asks "is it the banana?", answer "Robot yes" / "Robot no" (or with Sonic just "yes", "that's it",
+"not that one"); STOP counts as no.
+
 **When a voice command doesn't work,** the bottom of the screen says what was heard and why it was ignored, for
 example `Heard: robot move lift - not a command` or `Heard: robot move left - not sure (0.62, needs 0.70)`; the session
 log keeps them as `voice heard`. Every word must reach 0.70 confidence (lowered from 0.80, which dropped too many real
@@ -286,6 +297,16 @@ arm_controller             turns them into a smooth path   ┐ started by
 dynamixel_hardware_interface   sends servo commands        ┘
    ↓  USB /dev/ttyACM0
 OpenCR (usb_to_dxl)        passes commands to the servos, which report their angles back (/joint_states)
+```
+
+The voice and the agent sit next to it:
+
+```
+microphone -> Vosk (offline, exact phrases, STOP)  ┐
+           -> Nova 2 Sonic (free speech, tools)    ┴-> eye_control.py: the same checks for every command
+"bring me the banana" -> eyereach/agent_link.py -> agent/task_agent.py --serve (Python 3.12, deepagents)
+   table camera picture -> Nova 2 Lite: which object, where -> "is it the banana?" -> yes
+   -> brain/fetch.py FetchJob: glide, grab, carry to the person, let go (the app's own arm, one step a frame)
 ```
 
 How the control behaves. It is made for someone who can't use their arms: after a helper starts it, nothing
@@ -326,8 +347,8 @@ uses the head for the rough spot and the eyes to fine-tune. Not yet measured on 
   reports open) before the arm moves, and when the app closes it opens and waits again before the arm stops.
   It only closes when you pick up, and then **stays closed, holding what it grabbed, until your next mouth
   opening** (or LET GO), which opens it where it is and drops the item. (The fingers' position is too unreliable
-  to tell whether something was caught, so it is only written to the session log.) Mouth opening is the only grab/release gesture in both head and pointer control.
-  Nodding and double blinking do not trigger either action. Close your mouth first, then open it for about
+  to tell whether something was caught, so it is only written to the session log.) Mouth opening is the only grab/release gesture, in both head and pointer control;
+  nodding and double blinking do not trigger either action. Close your mouth first, then open it for about
   0.35 seconds. Keeping it open fires only once; close it before opening again to release. Pausing,
   losing the face, or switching to voice mode disarms it until the mouth closes again.
 
@@ -390,12 +411,14 @@ eyereach/      the control: gaze_webcam.py (face direction, iris gaze, calibrati
                head_tilt.py (turn to move, open the mouth to pick up; python3 -m eyereach.head_tilt checks it live)
                voice_commands.py (offline Vosk commands), audio_devices.py (webcam mic first, speaker's as fallback)
                speaker_volume.py (the speaker volume behind QUIETER / LOUDER)
-agent/         task_agent.py: the deepagents task agent ("bring me the pills": plan, confirm, pick, drop, tell)
+               agent_link.py (runs the task agent inside the app: its questions, its picks)
+agent/         task_agent.py: the deepagents task agent ("bring me the pills": plan, confirm, pick, drop, tell);
+               --serve runs it inside the eye app
                voice_sonic.py: Amazon Nova 2 Sonic: talk, the eye app's voice (--speak), free speech (--commands)
 brain/         arm.py: the robot maths, plus commands to check it (test, where, go, home)
                arm_link.py: the arm follows a point, grabs and releases (or a pretend arm)
-               fetch.py: one fetch for the task agent (glide, grab, carry to the person, let go), and the
-               table camera calibration
+               fetch.py: one fetch for the task agent (glide, grab, carry to the person, let go; FetchJob runs it a
+               step per frame inside the app), and the table camera calibration
 gestures/      gestures.py: the ROS 2 link that moves the joints
 launch/        eyereach.sh (one command: the arm and the app), talk.sh (Nova Sonic conversation),
                test_all.sh (test everything without moving the real arm),
@@ -704,7 +727,8 @@ The eye tracker and the arm stay in `~/eyereach_venv` (Python 3.10, because ROS 
 python3 -m pip install --user uv
 export PATH="$HOME/.local/bin:$PATH"
 uv venv --python 3.12 ~/eyereach_agent_venv
-uv pip install --python ~/eyereach_agent_venv/bin/python "deepagents>=0.7" "langchain-aws>=1.0" boto3 numpy opencv-python-headless
+uv pip install --python ~/eyereach_agent_venv/bin/python "deepagents>=0.7" "langchain-aws>=1.0" boto3 numpy opencv-python-headless \
+  "aws_sdk_bedrock_runtime>=0.1.0,<0.2.0" smithy-aws-core sounddevice photonhq-api   # Nova 2 Sonic, Photon
 ~/eyereach_agent_venv/bin/python -m unittest tests.test_task_agent           # from the repo folder
 ~/eyereach_agent_venv/bin/python -m agent.task_agent "bring me the pills"
 ```
@@ -727,7 +751,24 @@ checks the gripper and joints, starts the real arm, opens the gripper, and runs 
 mouth opening, using the saved calibration. Voice commands join in by themselves once `bash launch/setup_voice.sh`
 has been run and a microphone is plugged in (otherwise it says "Voice commands: off" and runs without them).
 Nova 2 Sonic joins in the same way when `.env` has the AWS keys (its voice, and free speech with voice commands).
-The task agent runs instead of the eye app with `--agent "grab me a banana"` (see [the task agent](#the-task-agent-langchain-deepagents)).
+With `TABLE_CAMERA` set at the top of `launch/eyereach.sh` (or `--table-camera /dev/video2`), the task agent runs
+inside the app: say "bring me the banana" (see [both at once](#both-at-once-face-control-voice-and-the-agent-two-cameras)).
+On its own, without the eye app: `--agent "grab me a banana"`.
+
+**The AWS keys in `.env`:** one `NAME=value` per line, with **no spaces around `=`** (a space makes the shell drop
+the key; `launch/test_all.sh` reports it as "no AWS_ACCESS_KEY_ID=... line"):
+
+```
+AWS_ACCESS_KEY_ID=AKIA...
+AWS_SECRET_ACCESS_KEY=...
+AWS_REGION=us-east-1
+```
+
+**Two cameras:** the face camera is `--camera`, the table camera is `--table-camera` (`v4l2-ctl --list-devices`
+shows their numbers). Either can be a stream address instead, for example a laptop's webcam: on a Mac,
+`ffmpeg -f avfoundation -framerate 30 -video_size 640x480 -i "0" -f mpjpeg -q:v 5 -listen 1 http://0.0.0.0:8080/face.mjpg`,
+then `launch/eyereach.sh --camera http://LAPTOP_IP:8080/face.mjpg` (same Wi-Fi; not yet tried). Over Wi-Fi the face
+picture arrives a little late, so the arm may trail the head; the table camera only takes one picture per task.
 
 The launcher has its settings at the top of `launch/eyereach.sh`: it **reuses the saved calibration** (only the
 first run, or a new screen size or pointer mode, calibrates; FIX MY AIM or C recalibrates any time), and the
@@ -793,5 +834,12 @@ Try the simulation first. On the real arm try `go 200 0 100` first and measure w
 - **A servo ignores a target near 0° or 360°** (Arduino test): keep targets inside 0 to 360; `servo_check.ino` already does.
 - **Nodes from another computer show up:** on a shared network, other computers' ROS nodes can appear in
   `ros2 node list`. Use a private network or set a different `ROS_DOMAIN_ID`.
+- **"Nova 2 Sonic: off" or Nova finds nothing:** the keys didn't load. Check `.env` has `NAME=value` lines with no
+  spaces around `=` (above), and that `~/eyereach_agent_venv` has the Sonic SDK (`bash launch/setup_jetson.sh`).
+- **"Task agent: off":** it needs voice commands and Sonic on, and on the real arm the table camera calibration
+  (`launch/eyereach.sh --agent calibrate --camera /dev/video2`, saved in `~/.eyereach/table_camera.json`). Move the
+  table camera and the arm reaches for the wrong spot: calibrate again.
+- **The arm grabs a little off the object:** calibrate the table camera again, clicking the table exactly under the
+  fingertips; for flat things lower `GRAB_MM` (never below 30).
 - **`fake.launch.py` refuses to run on the Jetson:** use the `base.launch.py ... use_fake_hardware:=true` command that
   `launch/eyereach.sh --sim` runs.
