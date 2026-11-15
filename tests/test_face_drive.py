@@ -141,7 +141,7 @@ class VisionMovementTest(unittest.TestCase):
         self.assertFalse(ctl.live_enabled)
 
     def test_steering_speed_limits(self):
-        for holding, expected in ((False, (12.5, 0.15)), (True, (7.5, 0.10))):
+        for holding, expected in ((False, (18.75, 0.225)), (True, (11.25, 0.15))):
             robot, ctl = self.controller()
             ctl.holding = holding
             observed = []

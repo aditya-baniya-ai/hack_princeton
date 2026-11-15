@@ -208,7 +208,7 @@ position immediately and, after a brief 0.15-second confirmation, runs one compl
 lower, close on the object, and lift back to the travel height. Keeping the mouth closed does not repeat it.
 Face loss, pausing or switching to voice cannot trigger a pickup. Once pickup starts it finishes even with the
 mouth closed; explicit STOP and arm faults still interrupt it. Successful pickup shows **Holding**, not Stopped.
-Vision steering remains limited to 12.5 mm/s (1.25 cm/s), or 7.5 mm/s while carrying. Open your eyes and mouth again
+Vision steering remains limited to 18.75 mm/s (1.875 cm/s), or 11.25 mm/s while carrying. Open your eyes and mouth again
 to carry the object. Closing the mouth while already holding it releases it at the current position. Open the mouth again before
 closing it for another action; keeping it closed never repeats the action. LET GO and voice drop also work. The former closed-eye steering and mouth-opening grab gestures have been removed.
 
@@ -340,7 +340,7 @@ uses the head for the rough spot and the eyes to fine-tune. Not yet measured on 
   with the eyes). Your face and its ray are shown under the dot. The dot waits while the face is lost. If it comes out poor (over 7% of the screen width) it tries once more.
 - **Move in real time:** point at the table map and the arm follows immediately, with no movement dwell.
   A larger mirrored face panel stays to the left of the map, and one aim line connects the nose to the
-  calibrated pointer. The arm keeps its limits of 12.5 mm/s (7.5 mm/s while carrying); the pointer uses
+  calibrated pointer. The arm keeps its limits of 18.75 mm/s (11.25 mm/s while carrying); the pointer uses
   responsive adaptive smoothing. Looking at the face panel or buttons stops live following.
   Closing either eye or the mouth, losing tracking, or pausing stops new vision steering commands. Pickup/release uses robot feedback; STOP interrupts the sequence and holds the arm. STOP stays stopped until you look at MOVE AGAIN.
   Use `--movement dwell` for the previous destination-based mode.

@@ -58,7 +58,7 @@ DIM, WHITE, CYAN, PINK = (150, 140, 140), (235, 235, 235), (230, 220, 90), (180,
 GOLD, GREEN, RED, GREY = (90, 200, 255), (120, 220, 120), (90, 90, 255), (90, 85, 85)
 RAY_COLOR = (255, 230, 120)
 TILT_LEAD = 0.2                # joystick mode: the arm heads this far (map units) ahead of where it is
-VISION_SPEEDS = (12.5, 0.15, 7.5, 0.10)  # mm/s and rad/s; slower again while carrying
+VISION_SPEEDS = (18.75, 0.225, 11.25, 0.15)  # mm/s and rad/s; slower again while carrying
 FOLLOW_SPEEDS = (100.0, 1.0, 60.0, 0.6)  # normal profile for voice/task actions; steering uses VISION_SPEEDS
 TELL = {   # what to do during calibration, per pointer mode: (on screen, spoken)
     "head": ("Point your nose at the yellow dot. Turn your head, not just your eyes.",
