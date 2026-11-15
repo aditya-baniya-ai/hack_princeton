@@ -38,6 +38,15 @@ def eye_opening(pts):
                           for e in (RIGHT, LEFT)]))
 
 
+def mouth_opening(pts):
+    """Inner lip gap / mouth width, independent of image scale and roll."""
+    pts = np.asarray(pts, float)
+    width = np.linalg.norm(pts[291, :2] - pts[61, :2])
+    if width < 1e-6:
+        return None
+    return float(np.linalg.norm(pts[14, :2] - pts[13, :2]) / width)
+
+
 def features_from_landmarks(pts, size):
     """pts: (478, 2) landmark pixels; size: (width, height) of the frame.
     Returns [gaze_x, gaze_y, eye_opening, head_x, head_y, face_x, face_y], or None on a blink.
@@ -125,6 +134,7 @@ class IrisGaze:
             min_detection_confidence=0.5, min_tracking_confidence=0.3)   # keep a turned or edge face
         self.pts = None          # landmarks of the last frame (None: no face), for the camera view
         self.opening = None      # how open the eyes were in the last frame (None: no face), for blinks
+        self.mouth = None        # inner lip opening / mouth width (None: no face)
         self.pose = None         # head_pose() of the last frame, for the ray
         self.nose = None         # nose_offset() of the last frame: where the nose is from between the eyes
         self.size = (640, 480)
@@ -135,11 +145,12 @@ class IrisGaze:
         self.size = (w, h)
         found = self.mesh.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)).multi_face_landmarks
         if not found:
-            self.pts, self.opening, self.pose, self.nose = None, None, None, None
+            self.pts, self.opening, self.pose, self.nose, self.mouth = None, None, None, None, None
             return None
         marks = found[0].landmark
         self.pts = np.array([(p.x * w, p.y * h) for p in marks])
         self.opening = eye_opening(self.pts)
+        self.mouth = mouth_opening(self.pts)
         self.pose = head_pose([(p.x * w, p.y * h, p.z * w) for p in marks], (w, h))
         self.nose = nose_offset(self.pts)
         head = None if self.pose is None else np.array(self.pose[:5])

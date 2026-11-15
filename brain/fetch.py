@@ -24,7 +24,12 @@ import arm  # noqa: E402
 import arm_link  # noqa: E402
 
 CALIBRATION = Path.home() / ".eyereach" / "table_camera.json"
-CALIBRATION_SPOTS = [(0.2, 0.2), (0.8, 0.2), (0.8, 0.8), (0.2, 0.8)]   # play-area spots the arm visits
+# Ten nearby, non-collinear samples: about 45 x 44 mm around the middle of the reach.
+# Start at the centre and visit neighbouring points instead of sweeping the whole table.
+CALIBRATION_SPOTS = [
+    (0.50, 0.50), (0.45, 0.50), (0.45, 0.35), (0.50, 0.35), (0.55, 0.35),
+    (0.55, 0.50), (0.55, 0.65), (0.50, 0.65), (0.45, 0.65), (0.475, 0.425),
+]
 DROP_AREA = (0.5, 0.05)        # play-area spot next to the person (v = 0 is the reach toward them)
 GRAB_MM = 50.0                 # same defaults as launch/eyereach.sh
 TRAVEL_MM = 120.0
@@ -119,42 +124,49 @@ def glide(robot, x, y, seconds=15.0):
 
 
 def calibrate(robot, camera):
-    """Visit four spots; at each, you click the table right under the fingertips in the camera view."""
+    """Visit ten nearby spots; click the table right under the fingertips at each."""
     import cv2
-    capture = cv2.VideoCapture(int(camera) if str(camera).isdigit() else camera)
-    capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)            # the size the eye app reads it at: same picture, same spots
-    capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-    clicks, photo, table = [], [], []
-    cv2.namedWindow("table camera")
-    cv2.setMouseCallback("table camera", lambda event, px, py, *_: event == cv2.EVENT_LBUTTONDOWN and
-                         clicks.append((px, py)))
-    for n, spot in enumerate(CALIBRATION_SPOTS, 1):
-        why = glide(robot, *arm_link.area_to_point(*spot))
-        if why:
-            return why
-        x, y, _, _ = arm.forward(robot.joints())
-        clicks.clear()
-        while not clicks:
-            ok, frame = capture.read()
-            if not ok:
-                return f"no picture from camera {camera}"
-            cv2.putText(frame, f"{n}/4: click the table right under the fingertips (Esc stops)", (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-            cv2.imshow("table camera", frame)
-            robot.update()
-            if cv2.waitKey(20) == 27:
-                return "stopped"
-        height, width = frame.shape[:2]
-        photo.append((clicks[0][0] / width, clicks[0][1] / height))
-        table.append((x, y))
     import numpy
-    matrix = cv2.getPerspectiveTransform(numpy.float32(photo), numpy.float32(table))
-    CALIBRATION.parent.mkdir(parents=True, exist_ok=True)
-    CALIBRATION.write_text(json.dumps({"camera": str(camera), "matrix": matrix.tolist()}))
-    print(f"Saved {CALIBRATION}")
-    capture.release()
-    cv2.destroyAllWindows()
-    return None
+
+    capture = cv2.VideoCapture(int(camera) if str(camera).isdigit() else camera)
+    try:
+        capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)     # same picture dimensions as the eye app
+        capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        clicks, photo, table = [], [], []
+        cv2.namedWindow("table camera")
+        cv2.setMouseCallback("table camera", lambda event, px, py, *_: event == cv2.EVENT_LBUTTONDOWN and
+                             clicks.append((px, py)))
+        total = len(CALIBRATION_SPOTS)
+        for n, spot in enumerate(CALIBRATION_SPOTS, 1):
+            why = glide(robot, *arm_link.area_to_point(*spot))
+            if why:
+                return why
+            x, y, _, _ = arm.forward(robot.joints())
+            clicks.clear()
+            while not clicks:
+                ok, frame = capture.read()
+                if not ok:
+                    return f"no picture from camera {camera}"
+                cv2.putText(frame, f"{n}/{total}: click the table under the fingertips (Esc stops)", (10, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+                cv2.imshow("table camera", frame)
+                robot.update()
+                if cv2.waitKey(20) == 27:
+                    return "stopped"
+            height, width = frame.shape[:2]
+            photo.append((clicks[0][0] / width, clicks[0][1] / height))
+            table.append((x, y))
+        # Least-squares homography uses every correspondence; getPerspectiveTransform takes only four.
+        matrix, _ = cv2.findHomography(numpy.asarray(photo, dtype=float), numpy.asarray(table, dtype=float), method=0)
+        if matrix is None or not numpy.isfinite(matrix).all() or numpy.linalg.matrix_rank(matrix) < 3:
+            return "calibration could not be fitted: click distinct table spots and try again"
+        CALIBRATION.parent.mkdir(parents=True, exist_ok=True)
+        CALIBRATION.write_text(json.dumps({"camera": str(camera), "matrix": matrix.tolist()}))
+        print(f"Saved {CALIBRATION} ({total} nearby points)")
+        return None
+    finally:
+        capture.release()
+        cv2.destroyAllWindows()
 
 
 def main():

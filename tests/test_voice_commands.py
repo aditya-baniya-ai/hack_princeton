@@ -47,11 +47,11 @@ class VoiceRoutingTest(unittest.TestCase):
         self.ctl = GuidedControl(self.robot, movement='follow')
         self.ctl.voice_available = True
 
-    def test_hands_free_mode_switch_and_no_competing_gaze_or_blink(self):
+    def test_hands_free_mode_switch_and_no_competing_gaze_or_mouth(self):
         self.ctl.voice('voice', 1)
         self.robot.halt.assert_called_once()
         self.assertTrue(self.ctl.live_enabled)        # voice mode is ready at once: no 'resume' needed
-        self.ctl.step(('map', (0.9, 0.2)), now=3, double_blink=True)
+        self.ctl.step(('map', (0.9, 0.2)), now=3, mouth_open=True)
         self.robot.follow.assert_not_called()
         self.robot.grab.assert_not_called()
         self.assertTrue(self.ctl.voice(('jog', 'left', 20.0), 4))

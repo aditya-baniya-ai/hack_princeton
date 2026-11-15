@@ -78,7 +78,7 @@ class EyeControl:
 # ---------------------------------------------------------------------------------------------
 # Guided control: for someone who can only move their eyes. Nothing moves until they choose it.
 #   look at a spot on the map and keep looking  -> the arm slowly goes there
-#   blink twice quickly                         -> pick up here, or let go if holding something
+#   open the mouth                           -> pick up here, or let go if holding something
 #   look at a button and keep looking           -> PICK UP / LET GO, STOP, FIX MY AIM
 #   look away, close the eyes, or lose the face -> nothing new happens, the arm finishes and waits
 # ---------------------------------------------------------------------------------------------
@@ -118,54 +118,37 @@ class Dwell:
         return min(1.0, progress), None
 
 
-class DoubleBlink:
-    """Two quick blinks in a row. Measured against how open this person's eyes usually are, so it works
-    for narrow and wide eyes. A long close (resting the eyes) never counts, and resets the count."""
+class MouthOpen:
+    """One action per deliberate opening; close the mouth before another can fire.
 
-    def __init__(self, shut=0.45, longest=0.5, within=1.0, warm_up=3.0):
-        self.shut = shut               # closed below this part of the usual opening
-        self.warm_up = warm_up         # seconds after the face appears before blinks count
-        self.seen_since = None         # when the face appeared
-        self.longest = longest         # seconds: a blink is shorter than this
-        self.within = within           # seconds: both blinks end within this
-        self.usual = None              # usual opening, a slow average while open
-        self.closed_since = None
-        self.blinks = []               # times recent quick blinks ended
+    Ratios are inner lip gap / mouth width. Face loss or disabled input disarms
+    detection, so returning with an open mouth cannot trigger a grab.
+    """
 
-    def update(self, opening, now, still=True):
-        """opening: eye_opening() this frame, or None with no face. still: the head is holding still
-        (turning or nodding changes how open the eyes look, which must not count as blinking).
-        True on the frame a double blink ends."""
-        if opening is None:
-            self.closed_since, self.blinks, self.seen_since = None, [], None
+    def __init__(self, opened=0.35, closed=0.20, hold=0.35):
+        self.opened, self.closed, self.hold = opened, closed, hold
+        self.armed = False
+        self.since = None
+
+    def update(self, opening, now, enabled=True):
+        if not enabled or opening is None or not math.isfinite(opening):
+            self.armed, self.since = False, None
             return False
-        if self.seen_since is None:
-            self.seen_since = now
-        if not still or now - self.seen_since < self.warm_up:
-            if self.usual is None or opening >= self.shut * self.usual:
-                self.usual = opening if self.usual is None else 0.97 * self.usual + 0.03 * opening
-            self.closed_since, self.blinks = None, []
-            return False
-        if self.usual is not None and opening < self.shut * self.usual:
-            if self.closed_since is None:
-                self.closed_since = now
-            return False
-        self.usual = opening if self.usual is None else 0.97 * self.usual + 0.03 * opening
-        if self.closed_since is None:
-            return False
-        closed, self.closed_since = now - self.closed_since, None
-        if closed > self.longest:
-            self.blinks = []
-            return False
-        self.blinks = [t for t in self.blinks if now - t <= self.within] + [now]
-        if len(self.blinks) >= 2:
-            self.blinks = []
-            return True
+        if opening <= self.closed:
+            self.armed, self.since = True, None
+        elif opening >= self.opened and self.armed:
+            if self.since is None:
+                self.since = now
+            if now - self.since >= self.hold:
+                self.armed, self.since = False, None
+                return True
+        else:
+            self.since = None
         return False
 
 
 class GuidedControl:
-    """Continuous or dwell-based control of the arm with dwell buttons and a double blink. step() takes what the person
+    """Continuous or dwell-based control of the arm with dwell buttons and a mouth opening. step() takes what the person
     is looking at; self.say holds sentences for the voice; self.events holds (name, details) for the
     session log; self.wants_calibration asks the app to re-calibrate."""
 
@@ -251,14 +234,14 @@ class GuidedControl:
         if self.phase == "moving":
             return "Moving. Look at STOP or say Stop."
         if getattr(self, "tilt", False):
-            return ("Nose moves the arm. Nod to let go. Say voice." if self.holding else
-                    "Nose moves the arm. Nod to pick up. Say voice.")
+            return ("Nose moves the arm. Open mouth to let go. Say voice." if self.holding else
+                    "Nose moves the arm. Open mouth to pick up. Say voice.")
         if self.movement == "follow":
-            return "Point to move. Blink twice to let go." if self.holding else "Point to move. Blink twice to pick up."
+            return "Point to move. Open your mouth to let go." if self.holding else "Point to move. Open your mouth to pick up."
         if self.holding:
-            return ("Blink twice to let go here." if self.phase == "there" else
-                    "Look where to put it, then blink twice to let go.")
-        return ("Blink twice to pick it up here, or choose another spot." if self.phase == "there" else
+            return ("Open your mouth to let go here." if self.phase == "there" else
+                    "Look where to put it, then open your mouth to let go.")
+        return ("Open your mouth to pick it up here, or choose another spot." if self.phase == "there" else
                 "Look at a spot on the table and keep looking. The arm goes there.")
 
     def go(self, target, why, now, then=None):
@@ -421,12 +404,12 @@ class GuidedControl:
         self.events.append(("fetch", {}))
         return None
 
-    def blink(self, now):
-        """A double blink: pick up here, or let go if holding something."""
-        self.press("let go" if self.holding else "pick up", now, how="blink")
+    def open_mouth(self, now):
+        """Opening the mouth: pick up here, or let go if holding something."""
+        self.press("let go" if self.holding else "pick up", now, how="mouth")
 
-    def step(self, looking, now=None, double_blink=False, suspended=False):
-        """One frame. looking: None, ("button", name) or ("map", (u, v)). double_blink: one just ended."""
+    def step(self, looking, now=None, mouth_open=False, suspended=False):
+        """One frame. looking: None, ("button", name) or ("map", (u, v)). mouth_open: a deliberate opening just fired."""
         now = time.monotonic() if now is None else now
         r = self.robot
         r.update()
@@ -443,14 +426,14 @@ class GuidedControl:
             self.live_enabled = True                       # what the person asked for: the face takes over again
             self.say[-1:] = ["Face control again."]
         if self.control_mode == "voice":
-            double_blink = False
+            mouth_open = False
         if suspended:
-            looking, double_blink = None, False
+            looking, mouth_open = None, False
             if self.phase in ("moving", "following", "jogging"):
                 r.halt()
                 self.target, self.then, self.phase = None, None, "waiting"
-        if double_blink:
-            self.blink(now)
+        if mouth_open:
+            self.open_mouth(now)
         if looking is not None:
             for group, names in (("mode", ("voice", "vision")), ("motion", ("stop", "resume"))):
                 if looking[0] == "button" and looking[1] in names:
@@ -519,8 +502,8 @@ class GuidedControl:
             self.say.append("Ready.")
         elif self.phase == "picking" and not r.busy():
             self.accept_after = now
-            # After a pick-up the gripper stays closed, holding what it grabbed, until the next double
-            # blink (or LET GO) opens it. The finger-position guess at whether something is held
+            # After a pick-up the gripper stays closed, holding what it grabbed, until the next mouth
+            # opening (or LET GO) opens it. The finger-position guess at whether something is held
             # is only logged: on the real arm it said "nothing" even when it had the object.
             detected = r.holding()
             position = getattr(r, "gripper_position", lambda: None)()
@@ -529,7 +512,7 @@ class GuidedControl:
             self.phase = "there" if self.holding else "waiting"
             self.events.append(("picked", {"holding": detected, "closed": r.closed,
                                            "gripper": round(position, 4) if isinstance(position, (int, float)) else None}))
-            self.say.append("Holding. Move to where you want to drop it, then blink twice.")
+            self.say.append("Holding. Move to where you want to drop it, then open your mouth.")
         elif self.phase == "letting go" and not r.busy():
             self.accept_after = now
             self.holding = False

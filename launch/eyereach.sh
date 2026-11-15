@@ -10,7 +10,7 @@
 #   launch/eyereach.sh --agent "grab me a banana" --camera /dev/video2
 #                                   the task agent instead of the eye app: Nova finds it with the table
 #                                   camera, you answer y/n, the arm brings it (add --sim or --no-arm too).
-#                                   Once first: --agent calibrate --camera /dev/video2 (click 4 spots).
+#                                   Once first: --agent calibrate --camera /dev/video2 (click 10 nearby spots).
 #
 # Other options go to the app, e.g. --camera /dev/video0, --windowed, --travel-mm 120 (they override
 # the settings below). The arm runs in the background (log: /tmp/robo_arm.log). Esc in the app (or

@@ -58,33 +58,13 @@ class DirectionTest(unittest.TestCase):
         self.assertEqual(out[-1].label, "no face")
 
 
-class NodTest(unittest.TestCase):
-    def test_a_quick_nod_counts_once_and_never_moves(self):
-        h = centred()
-        out, _ = run(h, [((3, -6), 1.0), ((3, -6 - 8), 0.15), ((3, -6 - 16), 0.2), ((3, -6 - 8), 0.1), ((3, -6), 1.0)])
-        self.assertEqual(sum(o.nod for o in out), 1)
-        self.assertTrue(all(o.direction is None for o in out))
-
-    def test_a_slow_tilt_down_is_a_move_not_a_nod(self):
-        h = centred()
-        out, _ = run(h, [((3, -6 - 18), 3.0)])
-        self.assertEqual(sum(o.nod for o in out), 0)
-        self.assertEqual(out[-1].label, "toward you")
-
-    def test_a_small_dip_or_a_sideways_dip_is_not_a_nod(self):
-        h = centred()
-        out, _ = run(h, [((3, -6 - 7), 0.3), ((3, -6), 0.5)])                     # too shallow
-        self.assertEqual(sum(o.nod for o in out), 0)
-        out, _ = run(h, [((3 + 25, -6 - 16), 0.3), ((3 + 25, -6), 0.5)])          # turned sideways
-        self.assertEqual(sum(o.nod for o in out), 0)
-
-    def test_two_nods_need_a_pause(self):
-        h = centred()
-        nod = [((3, -6 - 16), 0.25), ((3, -6), 0.25)]
-        out, _ = run(h, nod + nod)                               # straight after each other: one counts
-        self.assertEqual(sum(o.nod for o in out), 1)
-        out, _ = run(h, [((3, -6), 1.5)] + nod, start=out and 10.0)
-        self.assertEqual(sum(o.nod for o in out), 1)
+class NoNodGestureTest(unittest.TestCase):
+    def test_quick_nods_only_produce_position_updates(self):
+        for mode in ("follow", "joystick"):
+            h = HeadTilt(mode=mode)
+            h.set_centre(0, 0)
+            out, _ = run(h, [((0, 0), 1), ((0, -16), 0.25), ((0, 0), 0.5)] * 2)
+            self.assertTrue(all(not hasattr(o, "nod") for o in out))
 
 
 if __name__ == "__main__":
@@ -94,19 +74,17 @@ if __name__ == "__main__":
 class TiltDrivesTheArmTest(unittest.TestCase):
     """The app's per-frame tilt step with the pretend arm: real time, simulated head angles."""
 
-    def frames(self, ctl, head, pose, seconds, nod_ok=True):
+    def frames(self, ctl, head, pose, seconds):
         import time
         from eyereach import run_webcam
         end = time.monotonic() + seconds
         while time.monotonic() < end:
             now = time.monotonic()
             tilt = head.update(pose, now)
-            if tilt.nod and nod_ok:
-                ctl.blink(now)
             run_webcam.tilt_step(ctl, tilt, pose is not None, False, now)
             time.sleep(0.03)
 
-    def test_turn_left_moves_left_centre_stops_nod_picks_and_lets_go(self):
+    def test_turn_left_moves_left_centre_stops_mouth_picks_and_lets_go(self):
         from eyereach import eye_control
         robot = eye_control.arm_link.VirtualArm()
         robot.start()
@@ -123,15 +101,20 @@ class TiltDrivesTheArmTest(unittest.TestCase):
         u2 = robot.gripper_area()[0]
         self.frames(ctl, head, (0.0, 0.0), 1.0)
         self.assertAlmostEqual(robot.gripper_area()[0], u2, delta=0.01)   # stopped
-        self.frames(ctl, head, (0.0, 0.0), 1.3)                # (a pause before a nod counts)
-        for pitch, seconds in ((-16.0, 0.3), (0.0, 0.2)):      # a nod
+        # A nod no longer grabs; only opening the mouth requests a pickup.
+        for pitch, seconds in ((-16.0, 0.3), (0.0, 0.2)):
             self.frames(ctl, head, (0.0, pitch), seconds)
+        self.assertFalse(ctl.holding or robot.closed)
+        from eyereach.run_webcam import tilt_step
+        import time
+        now = time.monotonic()
+        tilt_step(ctl, head.update((0, 0), now), True, False, now, mouth_action=True)
         self.assertEqual(ctl.phase, "picking")
         self.frames(ctl, head, (0.0, 0.0), 5.0)
-        self.assertTrue(ctl.holding and robot.closed)           # holding after the nod
+        self.assertTrue(ctl.holding and robot.closed)           # holding after the mouth action
         self.frames(ctl, head, (0.0, 0.0), 1.5)
-        for pitch, seconds in ((-16.0, 0.3), (0.0, 0.2)):      # nod again: let go
-            self.frames(ctl, head, (0.0, pitch), seconds)
+        now = time.monotonic()
+        tilt_step(ctl, head.update((0, 0), now), True, False, now, mouth_action=True)
         self.frames(ctl, head, (0.0, 0.0), 3.0)
         self.assertFalse(ctl.holding or robot.closed)
 
@@ -270,11 +253,6 @@ class FollowTest(unittest.TestCase):
         out, _ = run(h, [((0.8, -0.6, 0.0), 0.05), ((-0.7, 0.9, 0.0), 0.05)] * 10)
         self.assertTrue(all(o.target == (0.5, 0.5) for o in out))
 
-    def test_a_nod_still_counts(self):
-        h = HeadTilt()
-        h.set_centre(0.0, 0.0, 0.0)
-        out, _ = run(h, [((0.0, 0.0), 1.5), ((0.0, -16.0), 0.25), ((0.0, 0.0), 0.5)])
-        self.assertEqual(sum(o.nod for o in out), 1)
 
 
 class FollowDrivesTheArmTest(unittest.TestCase):

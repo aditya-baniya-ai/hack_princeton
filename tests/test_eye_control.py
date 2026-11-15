@@ -130,67 +130,64 @@ class GuidedControlTest(unittest.TestCase):
         self.assertTrue(ctl.wants_calibration)
 
 
-def eyes(blinker, pattern, start=0.0, fps=20):
-    """Feed eye openings: pattern is [(opening, seconds), ...]. Returns the times a double blink fired."""
-    fired, t = [], start
-    for opening, seconds in pattern:
-        for _ in range(max(1, round(seconds * fps))):
-            t += 1 / fps
-            if blinker.update(opening, t):
-                fired.append(round(t, 2))
-    return fired
+class MouthOpenTest(unittest.TestCase):
+    def test_hold_fires_once_until_closed_again(self):
+        m = eye_control.MouthOpen()
+        self.assertFalse(m.update(0.05, 0))
+        self.assertFalse(m.update(0.5, 0.1))
+        self.assertTrue(m.update(0.5, 0.5))
+        self.assertFalse(m.update(0.5, 5))
+        self.assertFalse(m.update(0.05, 5.1))
+        self.assertFalse(m.update(0.5, 5.2))
+        self.assertTrue(m.update(0.5, 5.6))
 
+    def test_brief_opening_and_threshold_jitter_do_not_fire(self):
+        m = eye_control.MouthOpen()
+        for opening, now in ((0.05, 0), (0.5, 0.1), (0.25, 0.2),
+                             (0.5, 0.3), (0.05, 0.4)):
+            self.assertFalse(m.update(opening, now))
 
-OPEN, SHUT = 0.28, 0.06
-
-
-class DoubleBlinkTest(unittest.TestCase):
-    def test_two_quick_blinks_fire_once(self):
-        b = eye_control.DoubleBlink()
-        fired = eyes(b, [(OPEN, 4), (SHUT, 0.15), (OPEN, 0.3), (SHUT, 0.15), (OPEN, 1)])
-        self.assertEqual(len(fired), 1)
-
-    def test_one_blink_or_blinks_far_apart_do_nothing(self):
-        b = eye_control.DoubleBlink()
-        self.assertEqual(eyes(b, [(OPEN, 2), (SHUT, 0.15), (OPEN, 3), (SHUT, 0.15), (OPEN, 3)]), [])
-
-    def test_resting_the_eyes_does_nothing(self):
-        b = eye_control.DoubleBlink()
-        self.assertEqual(eyes(b, [(OPEN, 2), (SHUT, 2), (OPEN, 0.3), (SHUT, 0.15), (OPEN, 1)]), [])
-
-    def test_works_for_narrow_eyes_and_losing_the_face_resets(self):
-        b = eye_control.DoubleBlink()
-        self.assertEqual(len(eyes(b, [(0.15, 4), (0.04, 0.15), (0.15, 0.3), (0.04, 0.15), (0.15, 1)])), 1)
-        b = eye_control.DoubleBlink()
-        self.assertEqual(eyes(b, [(OPEN, 2), (SHUT, 0.15), (None, 0.3), (SHUT, 0.15), (OPEN, 1)]), [])
+    def test_face_loss_disabled_and_initial_open_mouth_require_closing(self):
+        for interrupt in (None, float('nan'), 0.05):
+            m = eye_control.MouthOpen()
+            self.assertFalse(m.update(0.5, 0))
+            self.assertFalse(m.update(0.5, 1))
+            m.update(0.05, 2)
+            m.update(0.5, 2.1)
+            m.update(interrupt, 2.2, enabled=interrupt != 0.05)
+            self.assertFalse(m.update(0.5, 3))
+            self.assertFalse(m.update(0.5, 4))
+            m.update(0.05, 5)
+            m.update(0.5, 5.1)
+            self.assertTrue(m.update(0.5, 5.5))
 
 
 class FreePlacementTest(unittest.TestCase):
-    def test_blink_pick_and_release_at_chosen_position(self):
+    def test_mouth_pick_and_release_at_chosen_position(self):
         robot, ctl = guided()
         robot.held = object()                          # something is under the gripper
-        ctl.step(None, double_blink=True)
+        ctl.step(None, mouth_open=True)
         self.assertEqual(ctl.phase, "picking")
         self.assertEqual(keep_looking(ctl, None, "there"), "there")
         self.assertTrue(ctl.holding and robot.closed)  # holding it: stays closed
         ctl.go((0.6, 0.5), "look", time.monotonic())
         self.assertEqual(keep_looking(ctl, None, "there"), "there")
         before = robot.gripper_area()
-        ctl.step(None, double_blink=True)
+        ctl.step(None, mouth_open=True)
         self.assertEqual(keep_looking(ctl, None, "waiting"), "waiting")
         self.assertFalse(ctl.holding or robot.closed)
         self.assertLess(math.dist(before, robot.gripper_area()), 1.0)
 
-    def test_stays_closed_after_a_pick_up_until_the_next_double_blink(self):
+    def test_stays_closed_after_a_pick_up_until_the_next_mouth_opening(self):
         robot, ctl = guided()                          # the finger check says "nothing held"
-        ctl.step(None, double_blink=True)
+        ctl.step(None, mouth_open=True)
         self.assertEqual(keep_looking(ctl, None, "there", seconds=10), "there")
-        for _ in range(50):                            # a while later, no blink: still closed
+        for _ in range(50):                            # a while later, no mouth opening: still closed
             ctl.step(None)
             time.sleep(0.02)
         self.assertTrue(ctl.holding and robot.closed)
         self.assertEqual(ctl.buttons()[0][0], "let go")
-        ctl.step(None, double_blink=True)              # the next double blink opens it
+        ctl.step(None, mouth_open=True)              # the next mouth opening opens it
         self.assertEqual(keep_looking(ctl, None, "waiting", seconds=10), "waiting")
         self.assertFalse(ctl.holding or robot.closed)
 
@@ -208,7 +205,7 @@ class GrabHeightTest(unittest.TestCase):
         robot, ctl = guided()
         heights = []
         robot.grab = lambda height: heights.append(height) or False
-        ctl.blink(time.monotonic())
+        ctl.open_mouth(time.monotonic())
         self.assertEqual(heights, [eye_control.GRAB_MM])
         self.assertGreaterEqual(eye_control.GuidedControl(robot, grab_mm=5).grab_mm, 30.0)
 
@@ -238,21 +235,6 @@ class SessionLogTest(unittest.TestCase):
             self.assertEqual((p["picks"], p["blinks"], p["held"], p["tasks"]), (1, 1, 1, [21.5]))
             self.assertAlmostEqual(p["cal_deg"][0], 1.62, places=1)   # 90 px of 1800 on 34 cm, at 60 cm
 
-
-
-class AccidentalBlinkTest(unittest.TestCase):
-    def test_blinks_while_turning_the_head_or_just_after_starting_do_nothing(self):
-        b = eye_control.DoubleBlink()
-        self.assertEqual(eyes(b, [(OPEN, 0.5), (SHUT, 0.15), (OPEN, 0.3), (SHUT, 0.15), (OPEN, 1)]), [])  # warm-up
-        b = eye_control.DoubleBlink()
-        eyes(b, [(OPEN, 4)])
-        fired, t = [], 4.0
-        for opening, seconds in [(SHUT, 0.15), (OPEN, 0.3), (SHUT, 0.15), (OPEN, 1)]:   # same blinks, head turning
-            for _ in range(round(seconds * 20)):
-                t += 0.05
-                fired += [t] if b.update(opening, t, still=False) else []
-        self.assertEqual(fired, [])
-        self.assertEqual(len(eyes(b, [(OPEN, 1), (SHUT, 0.15), (OPEN, 0.3), (SHUT, 0.15), (OPEN, 1)], start=t)), 1)
 
 
 if __name__ == "__main__":

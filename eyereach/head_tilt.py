@@ -1,4 +1,4 @@
-"""Head tilt control: turn or tilt the head to move the arm that way; nod to pick up or let go.
+"""Head tilt control: turn or tilt the head to position the arm.
 
 No screen calibration: only "which way is the face turned, compared with when you looked straight ahead".
 
@@ -7,19 +7,16 @@ tip sideways from it and looking up or down moves it up or down (gaze_webcam.nos
 2D measure stays steady wherever the face is in the picture and whatever the camera's angle (the 3D head angle
 read 41 deg "straight" with the webcam off to the side, and drifted). nose_angles() turns it into degrees.
 
-    python3 -m eyereach.head_tilt          check it with your own head (no arm): prints each move and nod
+    python3 -m eyereach.head_tilt          check it with your own head (no arm): prints each move
 
     look left / right, or tilt the head left / right (ear toward the shoulder)
                         -> the arm moves to your left / right (the stronger of the two counts)
     look up / down      -> the arm moves away from you / toward you
     back to the centre  -> the arm stops
-    a quick nod         -> pick up here, or let go if holding something
 
 Safety and false triggers:
 - A small dead zone around the centre, so holding still doesn't drift the arm.
 - A tilt has to be held for HOLD seconds before the arm moves, so a nod (quicker than that) never moves it.
-- A nod is a quick dip and return (down past NOD_DEG and back near the centre within NOD_MAX seconds) with the
-  head not turned sideways; then a NOD_GAP pause before another nod counts.
 - No face (or no head direction) gives no movement.
 Directions come from gaze_webcam.head_pose: yaw > 0 is the face turned toward the picture's right, which is the
 person's own left; pitch > 0 is up; roll > 0 is the head tilted to the person's own right (checked by turning a
@@ -32,11 +29,6 @@ from dataclasses import dataclass
 DEAD = 8.0           # degrees from the centre that count as "still"
 FULL = 25.0          # degrees for full speed
 HOLD = 0.6           # seconds a tilt must be held before the arm moves (a nod is quicker)
-NOD_DEG = 10.0       # a nod dips at least this far down ...
-NOD_BACK = 5.0       # ... and comes back within this of the centre ...
-NOD_MAX = 0.9        # ... within this many seconds,
-NOD_SIDE = 10.0      # with the head turned less than this sideways
-NOD_GAP = 1.2        # seconds after a nod before another one counts
 FLIP_VERTICAL = False
 NOSE_DEPTH = 0.5     # how far the nose tip stands out from the eyes, in eye-widths: a turn of a degrees moves it
                      # about NOSE_DEPTH * sin(a) eye-widths across (so 20 deg is about 0.17)
@@ -53,7 +45,6 @@ class Tilt:
     direction: tuple = None      # (du, dv) on the table map, unit length, or None: don't move
     speed: float = 0.0           # 0..1 of the speed limit
     label: str = "centre"        # "left", "right", "away", "toward", "left and away", ... or "centre" / "no face"
-    nod: bool = False            # a nod just finished
     held: float = 0.0            # 0..1: how far the current tilt is toward HOLD (for the screen)
     target: tuple = None         # follow mode: the spot on the table map (u, v) the nose points to
     yaw: float = 0.0             # degrees from the centre (person's left is positive)
@@ -86,9 +77,6 @@ class HeadTilt:
         self.centre = None           # (yaw, pitch) in degrees when looking straight ahead
         self.tilt_since = None       # when the current (outside the dead zone) tilt began
         self.tilt_side = None        # its rough direction, so changing direction restarts the hold
-        self.dip = None              # (start time, deepest pitch) of a possible nod
-        self.dip_done = False        # a dip turned out to be a tilt: no new nod until back near the centre
-        self.last_nod = -math.inf
         self.last_seen = None        # ((yaw, pitch), time) of the last face, for GRACE
 
     def set_centre(self, yaw, pitch, roll=0.0, anchor=None):
@@ -97,8 +85,7 @@ class HeadTilt:
         self.centre = (yaw, pitch, roll)
         self.anchor = (0.5, 0.5) if anchor is None else tuple(anchor)
         self.smoothed = None
-        self.tilt_since = self.tilt_side = self.dip = None
-        self.dip_done = False
+        self.tilt_since = self.tilt_side = None
 
     def update(self, pose_deg, now):
         """pose_deg: (yaw, pitch) or (yaw, pitch, roll) in degrees, or None with no face. Returns a Tilt."""
@@ -107,21 +94,19 @@ class HeadTilt:
         elif pose_deg is not None:
             self.last_seen = (pose_deg, now)
         if pose_deg is None or self.centre is None:
-            self.tilt_since = self.tilt_side = self.dip = None
-            self.dip_done = False
+            self.tilt_since = self.tilt_side = None
             return Tilt(label="no face" if pose_deg is None else "centre")
         yaw, pitch = pose_deg[0] - self.centre[0], pose_deg[1] - self.centre[1]
         roll = (pose_deg[2] - self.centre[2]) if len(pose_deg) > 2 else 0.0
-        nod = self._nod(yaw, pitch, now)
-        out = Tilt(nod=nod, yaw=yaw, pitch=pitch, roll=roll)
+        out = Tilt(yaw=yaw, pitch=pitch, roll=roll)
         # left/right: looking (yaw) or tilting the head (roll), whichever is stronger; as "to the left" degrees
         lefty = yaw if abs(yaw) >= abs(roll) else -roll
         if self.mode == "follow":
             self._settle(pose_deg, yaw, pitch, now)
             return self._follow(out, lefty, pitch)
         side = (abs(lefty) > self.dead and (1 if lefty > 0 else -1), abs(pitch) > self.dead and (1 if pitch > 0 else -1))
-        if side == (False, False) or nod or self.dip is not None:
-            self.tilt_since = self.tilt_side = None   # centred, or in the middle of a nod: don't move
+        if side == (False, False):
+            self.tilt_since = self.tilt_side = None   # centred: don't move
             return out
         if side != self.tilt_side:
             self.tilt_since, self.tilt_side = now, side
@@ -170,27 +155,6 @@ class HeadTilt:
             out.direction = (-lefty / size, flip * pitch / size)
         return out
 
-    def _nod(self, yaw, pitch, now):
-        """True on the frame a quick down-and-back nod finishes."""
-        if self.dip is None:
-            if self.dip_done:
-                self.dip_done = pitch < -NOD_BACK        # still tilted down: it's a move, not a new nod
-                return False
-            if pitch < -NOD_DEG / 2 and abs(yaw) < NOD_SIDE and now - self.last_nod > NOD_GAP:  # (roll: see update)
-                self.dip = (now, pitch)                # going down: maybe a nod
-            return False
-        start, deepest = self.dip
-        deepest = min(deepest, pitch)
-        self.dip = (start, deepest)
-        if abs(yaw) >= NOD_SIDE or now - start > NOD_MAX:
-            self.dip, self.dip_done = None, True       # turned sideways, or too slow: a tilt, not a nod
-            return False
-        if pitch > -NOD_BACK:                          # back near the centre
-            self.dip = None
-            if deepest <= -NOD_DEG:
-                self.last_nod = now
-                return True
-        return False
 
 
 def live(seconds=60.0, camera="/dev/video0"):
@@ -210,15 +174,15 @@ def live(seconds=60.0, camera="/dev/video0"):
         print("No face found: move the camera so the whole face is in the picture.")
         return
     head.set_centre(*np.median(np.array(poses), axis=0))
-    print("Centre set. Turn left/right, tilt up/down, nod. Ctrl+C ends.\n")
+    print("Centre set. Turn left/right, tilt up/down. Ctrl+C ends.\n")
     last, end = None, time.monotonic() + seconds
     try:
         while time.monotonic() < end:
             gaze.features(cam.read())
             now = time.monotonic()
             t = head.update(None if gaze.nose is None or gaze.pose is None else nose_angles(gaze.nose, gaze.pose[2]), now)
-            line = f"yaw {t.yaw:+5.1f}  pitch {t.pitch:+5.1f}  roll {t.roll:+5.1f}   {t.label:20s}" + ("   NOD -> pick up / let go" if t.nod else "")
-            if t.nod or t.label != last:
+            line = f"yaw {t.yaw:+5.1f}  pitch {t.pitch:+5.1f}  roll {t.roll:+5.1f}   {t.label:20s}"
+            if t.label != last:
                 print(line, flush=True)
                 last = t.label
     except KeyboardInterrupt:

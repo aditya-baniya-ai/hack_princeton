@@ -143,3 +143,19 @@ class DrawTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MouthLandmarksTest(unittest.TestCase):
+    def test_opening_is_invariant_to_scale_translation_and_roll(self):
+        from eyereach.gaze_webcam import mouth_opening
+        pts = np.zeros((478, 2))
+        pts[61], pts[291] = (-50, 0), (50, 0)
+        pts[13], pts[14] = (0, -20), (0, 20)
+        self.assertAlmostEqual(mouth_opening(pts), 0.4)
+        angle = 0.7
+        rotation = np.array([[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]])
+        self.assertAlmostEqual(mouth_opening(pts @ rotation * 3 + (300, 200)), 0.4)
+        pts[14] = pts[13]
+        self.assertEqual(mouth_opening(pts), 0)
+        pts[291] = pts[61]
+        self.assertIsNone(mouth_opening(pts))
